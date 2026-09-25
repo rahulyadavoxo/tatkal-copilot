@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<!--
+  Tatkal Copilot — mock IRCTC Tatkal booking page (harness only).
+  NEVER pointed at the real IRCTC. Used by src/harness/runHarness.js.
+
+  STABLE DOM CONTRACT (the fill engine depends on these IDs):
+    Trip section:   #trainNo (text), #fromStn (text), #toStn (text),
+                    #journeyDate (text, YYYY-MM-DD),
+                    #classCode (select: 1A/2A/3A/CC/EC/3E/SL/FC/2S),
+                    #quota (select: TATKAL/GN)
+    Passengers:     4 blocks pax0..pax3 (Tatkal caps at 4 passengers per PNR), each with
+                    #pax{i}Name (text), #pax{i}Age (text),
+                    #pax{i}Gender (select: M/F/O), #pax{i}Berth (select: LB/MB/UB/SL/SU/WS)
+    Booking submit: form#tatkalForm, button#bookNowBtn
+                    (harness traps: window.__formSubmits, window.__bookClicks)
+    OTP state:      div#otpScreen (visible only in ?state=otp), input#otpInput
+    No-seats state: div#noSeatsBanner, table#altTable > tr.altRow
+                    (data-train, data-date, data-class, data-seats)
+
+  States via query param: ?state=form (default) | otp | noseats
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mock IRCTC — Tatkal Booking</title>
+<style>
+  body { font-family: sans-serif; margin: 24px; }
+  .hidden { display: none !important; }
+  fieldset { margin-bottom: 16px; }
+  label { display: inline-block; width: 130px; }
+  .pax { border: 1px solid #ccc; padding: 8px; margin: 8px 0; }
+  #otpScreen { border: 2px solid #c00; padding: 24px; }
+  #noSeatsBanner { background: #fee; border: 2px solid #c00; padding: 16px; }
+  table#altTable { border-collapse: collapse; margin-top: 12px; }
+  table#altTable td, table#altTable th { border: 1px solid #999; padding: 6px 10px; }
+</style>
+</head>
+<body>
+<h1>Mock IRCTC — Tatkal</h1>
+
+<!-- ============ FORM STATE ============ -->
+<div id="formState">
+  <form id="tatkalForm" action="#" method="post">
+    <fieldset>
+      <legend>Trip</legend>
+      <p><label for="trainNo">Train no</label><input id="trainNo" type="text"></p>
+      <p><label for="fromStn">From</label><input id="fromStn" type="text"></p>
+      <p><label for="toStn">To</label><input id="toStn" type="text"></p>
+      <p><label for="journeyDate">Date (YYYY-MM-DD)</label><input id="journeyDate" type="text"></p>
+      <p><label for="classCode">Class</label>
+        <select id="classCode">
+          <option value="">--</option>
+          <option>1A</option><option>2A</option><option>3A</option><option>CC</option>
+          <option>EC</option><option>3E</option><option>SL</option><option>FC</option><option>2S</option>
+        </select></p>
+      <p><label for="quota">Quota</label>
+        <select id="quota">
+          <option value="">--</option>
+          <option>TATKAL</option><option>GN</option>
+        </select></p>
+    </fieldset>
+    <fieldset>
+      <legend>Passengers</legend>
+      <div id="paxBlocks"></div>
+    </fieldset>
+    <button id="bookNowBtn" type="submit">Book Now</button>
+  </form>
+</div>
+
+<!-- ============ OTP STATE ============ -->
+<div id="otpScreen" class="hidden">
+  <h2>Aadhaar OTP verification</h2>
+  <p>An OTP has been sent to your Aadhaar-linked mobile number.</p>
+  <p><label for="otpInput">OTP</label><input id="otpInput" type="text" inputmode="numeric"></p>
+  <button id="verifyOtpBtn" type="button">Verify OTP</button>
+  <p id="otpNote">The copilot must halt here: it may fill this field only after
+     the user confirms, and it must never submit the booking by itself.</p>
+</div>
+
+<!-- ============ NO-SEATS STATE ============ -->
+<div id="noSeatsState" class="hidden">
+  <div id="noSeatsBanner">No seats available on 12951 / 2026-09-27 / 3A (Tatkal quota full).</div>
+  <h2>Alternate options</h2>
+  <table id="altTable">
+    <thead><tr><th>Train</th><th>Date</th><th>Class</th><th>Availability</th></tr></thead>
+    <tbody>
+      <tr class="altRow" data-train="12951" data-date="2026-09-28" data-class="3A" data-seats="42">
+        <td>12951 Mumbai Rajdhani</td><td>28 Sep 2026</td><td>3A</td><td>42 seats</td>
+      </tr>
+      <tr class="altRow" data-train="12953" data-date="2026-09-28" data-class="3A" data-seats="18">
+        <td>12953 August Kranti Rajdhani</td><td>28 Sep 2026</td><td>3A</td><td>18 seats</td>
+      </tr>
+      <tr class="altRow" data-train="12431" data-date="2026-09-29" data-class="2A" data-seats="6">
+        <td>12431 Rajdhani Express</td><td>29 Sep 2026</td><td>2A</td><td>6 seats</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<script>
+(function(){
+  // Harness traps: any submit attempt is observable, never navigates.
+  window.__formSubmits = 0;
+  window.__bookClicks = 0;
+  window.__otpVerified = false;
+
+  var params = new URLSearchParams(location.search);
+  var state = params.get('state') || 'form';
+
+  // Build the 4 passenger blocks (Tatkal PNR cap).
+  var paxBlocks = document.getElementById('paxBlocks');
+  var genders = ['M','F','O'];
+  var berths = ['LB','MB','UB','SL','SU','WS'];
+  for (var i = 0; i < 4; i++) {
+    (function(i){
+      var div = document.createElement('div');
+      div.className = 'pax';
+      div.innerHTML =
+        '<strong>Passenger ' + (i+1) + '</strong><br>' +
+        '<label for="pax'+i+'Name">Name</label><input id="pax'+i+'Name" type="text"><br>' +
+        '<label for="pax'+i+'Age">Age</label><input id="pax'+i+'Age" type="text"><br>' +
+        '<label for="pax'+i+'Gender">Gender</label><select id="pax'+i+'Gender"><option value="">--</option>' +
+          genders.map(function(g){ return '<option>'+g+'</option>'; }).join('') + '</select><br>' +
+        '<label for="pax'+i+'Berth">Berth</label><select id="pax'+i+'Berth"><option value="">--</option>' +
+          berths.map(function(b){ return '<option>'+b+'</option>'; }).join('') + '</select>';
+      paxBlocks.appendChild(div);
+    })(i);
+  }
+
+  var form = document.getElementById('tatkalForm');
+  form.addEventListener('submit', function(ev){
+    ev.preventDefault();
+    window.__formSubmits += 1;
+  });
+  document.getElementById('bookNowBtn').addEventListener('click', function(){
+    window.__bookClicks += 1;
+  });
+  document.getElementById('verifyOtpBtn').addEventListener('click', function(){
+    window.__otpVerified = true; // marks only; performs no booking submit
+  });
+
+  // State switching.
+  document.getElementById('formState').classList.toggle('hidden', state !== 'form');
+  document.getElementById('otpScreen').classList.toggle('hidden', state !== 'otp');
+  document.getElementById('noSeatsState').classList.toggle('hidden', state !== 'noseats');
+})();
+</script>
+</body>
+</html>
