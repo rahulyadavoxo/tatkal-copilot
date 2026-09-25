@@ -1,0 +1,16 @@
+# Dependencies — EAS installs these cleanly on the builder
+node_modules/
+
+# Expo / Metro
+.expo/
+dist/
+web-build/
+
+# Native debug outputs (never commit)
+*.log
+
+# macOS / editors
+.DS_Store
+
+# Keep android/ committed: EAS uses the prebuilt native project as-is
+# Keep eas.json, app.json, assets/ committed
