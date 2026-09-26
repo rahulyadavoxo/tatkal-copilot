@@ -5,6 +5,8 @@
  * localhost navigation is blocked in this sandbox), injects the fill-engine
  * script built from src/core/fillEngine.ts, and asserts gates:
  *   G1 fill correctness + wall time in (4.2s, 120s]   -> FILL_OK <ms>
+ *   G1b realistic mock (zero ids, label-located, +Add Passenger,
+ *       mat-select/p-dropdown widgets)                   -> REALFILL_OK <ms>
  *   G2 pacing: total >= 4.2s, per-field gaps >= 120ms  -> PACE_OK
  *   G4 OTP gate: OTP_REQUIRED emitted, zero submits     -> OTP_GATE_OK
  *   G5 no-auto-book source scan                        -> NO_AUTOBOOK_OK
@@ -21,6 +23,7 @@ const { execFileSync } = require('child_process');
 
 const REPO = path.resolve(__dirname, '..', '..');
 const MOCK = path.join(REPO, 'src', 'harness', 'mockIrctc.html');
+const MOCK_REAL = path.join(REPO, 'src', 'harness', 'mockIrctcReal.html');
 
 function fail(msg) {
   console.error('HARNESS_FAIL: ' + msg);
@@ -67,6 +70,8 @@ const PLAN = {
   classCode: '3A',
   quota: 'TATKAL',
   autoUpgradation: true,
+  contactMobile: '9876543210',
+  travelInsurance: true,
   passengers: [
     { name: 'Aarav Sharma', age: 34, gender: 'M', berthPref: 'LB' },
     { name: 'Diya Sharma', age: 31, gender: 'F', berthPref: 'MB' },
@@ -110,18 +115,31 @@ async function waitForEvent(page, type, timeoutMs) {
         fail(`G1: FIELD_FILLED count ${filled.length} != action count ${actions.length}`);
       }
 
-      // G1: every field holds the right value (checkboxes: checked state).
+      // G1: every field holds the right value (checkboxes: checked state;
+      // radios: the right option checked; addPassenger: no DOM value).
       for (const a of actions) {
+        if (a.kind === 'addPassenger') continue; // no value to assert
         if (a.kind === 'checkbox') {
-          const checked = await page.$eval('#' + a.id, (el) => el.checked);
+          const checked = await page.$eval('#' + a.locator.id, (el) => el.checked);
           if (checked !== (a.value !== 'off')) {
-            fail(`G1: checkbox #${a.id} checked=${checked}, expected value ${JSON.stringify(a.value)}`);
+            fail(`G1: checkbox #${a.locator.id} checked=${checked}, expected value ${JSON.stringify(a.value)}`);
           }
           continue;
         }
-        const val = await page.$eval('#' + a.id, (el) => el.value);
+        if (a.kind === 'radio') {
+          const yesChecked = await page.evaluate(() => {
+            const radios = Array.from(document.querySelectorAll('input[type="radio"]'));
+            const yes = radios.find((r) => (r.value || '') === 'yes');
+            return !!(yes && yes.checked);
+          });
+          if (yesChecked !== (a.value === 'yes')) {
+            fail(`G1: travel-insurance radio state wrong (yes checked=${yesChecked})`);
+          }
+          continue;
+        }
+        const val = await page.$eval('#' + a.locator.id, (el) => el.value);
         if (val !== a.value) {
-          fail(`G1: field #${a.id} = ${JSON.stringify(val)}, expected ${JSON.stringify(a.value)}`);
+          fail(`G1: field #${a.locator.id} = ${JSON.stringify(val)}, expected ${JSON.stringify(a.value)}`);
         }
       }
 
@@ -132,7 +150,7 @@ async function waitForEvent(page, type, timeoutMs) {
       }
       for (let i = 1; i < filled.length; i++) {
         const gap = filled[i].t - filled[i - 1].t;
-        if (gap < 120) fail(`G2: gap before ${filled[i].data.id} was ${gap}ms (< 120ms)`);
+        if (gap < 120) fail(`G2: gap before ${filled[i].data.label} was ${gap}ms (< 120ms)`);
       }
 
       // No submit may have happened during a fill.
@@ -168,6 +186,69 @@ async function waitForEvent(page, type, timeoutMs) {
           JSON.stringify(probes[0].data));
       }
       console.log('PROBE_OK');
+      await page.close();
+    }
+
+    // ============ Phase A3: REALFILL — realistic mock, zero ids ============
+    // Mirrors IRCTC's real passenger page (device screenshots 2026-09-26):
+    // every field is located by placeholder / visible label text only, the
+    // Gender dropdown is PrimeNG-style, Berth is mat-select-style, and the
+    // 2nd passenger block is created by clicking "+ Add Passenger".
+    {
+      const page = await browser.newPage();
+      await page.goto('file://' + MOCK_REAL);
+      const realPlan = { ...PLAN, passengers: PLAN.passengers.slice(0, 2) };
+      const realActions = engine.buildFieldActions(realPlan);
+      const realScript = engine.buildFillScript(realPlan, { seed: SEED });
+      await page.addScriptTag({ content: realScript });
+      await waitForEvent(page, 'FILL_COMPLETE', 90000);
+
+      const log = await eventLog(page);
+      const missing = log.filter((e) => e.type === 'FIELD_MISSING');
+      if (missing.length !== 0) {
+        fail('REALFILL: FIELD_MISSING for ' + missing.map((e) => e.data.label).join(', '));
+      }
+      const filled = log.filter((e) => e.type === 'FIELD_FILLED');
+      if (filled.length !== realActions.length) {
+        fail(`REALFILL: FIELD_FILLED count ${filled.length} != action count ${realActions.length}`);
+      }
+
+      // Values actually landed in the page's DOM widgets.
+      const dom = await page.evaluate(() => {
+        const q = (s) => Array.from(document.querySelectorAll(s));
+        return {
+          names: q('input[placeholder="Full Name as per Govt. ID"]').map((i) => i.value),
+          ages: q('input[placeholder="Age"]').map((i) => i.value),
+          genders: q('.p-dropdown').map((d) => d.getAttribute('data-value')),
+          berths: q('mat-select').map((m) => m.getAttribute('data-value')),
+          mobile: document.querySelector('input[placeholder="Mobile Number"]').value,
+          autoUpg: document.querySelector('#autoUpg').checked,
+          insYes: document.querySelector('input[name="travelIns"][value="yes"]').checked,
+        };
+      });
+      const eq = (a, b, what) => {
+        if (JSON.stringify(a) !== JSON.stringify(b)) {
+          fail(`REALFILL: ${what} = ${JSON.stringify(a)}, expected ${JSON.stringify(b)}`);
+        }
+      };
+      eq(dom.names, ['Aarav Sharma', 'Diya Sharma'], 'names');
+      eq(dom.ages, ['34', '31'], 'ages');
+      eq(dom.genders, ['Male', 'Female'], 'genders');
+      eq(dom.berths, ['Lower', 'Middle'], 'berths');
+      eq(dom.mobile, '9876543210', 'mobile');
+      eq(dom.autoUpg, true, 'auto-upgradation');
+      eq(dom.insYes, true, 'travel insurance');
+
+      // Pacing still respects the floor (2 pax -> 4.2s floor).
+      const totalMs = filled[filled.length - 1].t - filled[0].t;
+      if (!(totalMs > 4200 && totalMs <= 120000)) {
+        fail(`REALFILL: total fill time ${totalMs}ms not in (4200, 120000]`);
+      }
+      const submits = await page.evaluate('window.__formSubmits');
+      if (submits !== 0) {
+        fail(`REALFILL: fill phase performed ${submits} form submits`);
+      }
+      console.log(`REALFILL_OK ${totalMs}`);
       await page.close();
     }
 

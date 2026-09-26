@@ -11,6 +11,7 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -50,6 +51,8 @@ export default function TripSetupScreen({
   const [journeyDate, setJourneyDate] = useState('');
   const [classCode, setClassCode] = useState<string>('3A');
   const [selected, setSelected] = useState<string[]>([]);
+  const [contactMobile, setContactMobile] = useState('');
+  const [travelInsurance, setTravelInsurance] = useState(true);
   const [error, setError] = useState('');
   const prefilled = useRef(false);
 
@@ -68,6 +71,8 @@ export default function TripSetupScreen({
         setJourneyDate(trip.journeyDate);
         setClassCode(trip.classCode);
         setSelected(trip.passengerIds);
+        setContactMobile(trip.contactMobile ?? '');
+        setTravelInsurance(trip.travelInsurance ?? true);
         prefilled.current = true;
       }
     }
@@ -112,6 +117,11 @@ export default function TripSetupScreen({
       setError('Pick the journey date from the calendar.');
       return;
     }
+    const mob = contactMobile.replace(/\D/g, '');
+    if (mob && !/^[6-9]\d{9}$/.test(mob)) {
+      setError('Mobile number must be a 10-digit Indian number (or leave it empty — IRCTC usually fills it from your profile).');
+      return;
+    }
     // Validate the date by running the real window math (throws on bad input).
     try {
       tatkalBookingOpen(d, isAC, TATKAL_TIMING);
@@ -128,6 +138,8 @@ export default function TripSetupScreen({
       classCode,
       isAC,
       passengerIds: selected,
+      contactMobile: mob,
+      travelInsurance,
       createdAt: Date.now(),
     };
     const trips = await loadTrips();
@@ -227,6 +239,33 @@ export default function TripSetupScreen({
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
+      <Text style={styles.label}>Contact mobile (IRCTC's form field — leave empty and IRCTC fills it from your profile)</Text>
+      <TextInput
+        style={styles.input}
+        value={contactMobile}
+        onChangeText={setContactMobile}
+        placeholder="10-digit mobile number"
+        placeholderTextColor={C.muted}
+        keyboardType="phone-pad"
+        maxLength={10}
+      />
+
+      <Text style={styles.label}>Travel insurance (₹0.45/person on IRCTC)</Text>
+      <View style={styles.insRow}>
+        <TouchableOpacity
+          style={[styles.chip, travelInsurance && styles.chipOn]}
+          onPress={() => setTravelInsurance(true)}
+        >
+          <Text style={[styles.chipText, travelInsurance && styles.chipTextOn]}>Yes, take it</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.chip, !travelInsurance && styles.chipOn]}
+          onPress={() => setTravelInsurance(false)}
+        >
+          <Text style={[styles.chipText, !travelInsurance && styles.chipTextOn]}>No, skip it</Text>
+        </TouchableOpacity>
+      </View>
+
       <TouchableOpacity style={styles.primary} onPress={save}>
         <Text style={styles.primaryText}>
           {editing ? 'Save changes → Countdown' : 'Save trip → Countdown'}
@@ -263,6 +302,11 @@ const styles = StyleSheet.create({
   paxText: { color: C.ink, fontSize: 14 },
   paxTextOn: { fontWeight: '700' },
   error: { color: C.danger, fontSize: 13, marginTop: 10 },
+  input: {
+    borderColor: C.line, borderWidth: 1, borderRadius: 8,
+    padding: 11, color: C.ink, fontSize: 15, marginBottom: 4,
+  },
+  insRow: { flexDirection: 'row', gap: 8 },
   link: { color: C.lime, fontSize: 13, fontWeight: '700', marginTop: 6 },
   primary: {
     backgroundColor: C.lime, borderRadius: 10, padding: 14,

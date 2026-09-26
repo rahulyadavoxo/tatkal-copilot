@@ -39,6 +39,8 @@ export interface Trip {
   classCode: string; // '3A' | '2A' | 'SL' | ...
   isAC: boolean;
   passengerIds: string[]; // refs into the passenger vault, max 4 (Tatkal PNR cap)
+  contactMobile: string; // contact-details mobile, filled into IRCTC's form
+  travelInsurance: boolean; // true = take travel insurance (IRCTC default)
   createdAt: number;
 }
 

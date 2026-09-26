@@ -62,10 +62,19 @@
     <fieldset>
       <legend>Passengers</legend>
       <div id="paxBlocks"></div>
+      <button id="addPaxBtn" type="button">+ Add Passenger</button>
+    </fieldset>
+    <fieldset>
+      <legend>Contact Details</legend>
+      <p><label for="contactMobile">Mobile Number</label><input id="contactMobile" type="tel" placeholder="Mobile Number"></p>
     </fieldset>
     <fieldset>
       <legend>Other Preference</legend>
       <p><label for="autoUpgradation">Consider for auto upgradation</label><input id="autoUpgradation" type="checkbox"></p>
+      <p>Travel Insurance (Incl. of GST)
+        <label><input type="radio" name="ti" value="yes"> Yes, and I accept the terms &amp; conditions</label>
+        <label><input type="radio" name="ti" value="no"> No, I don't want travel insurance</label>
+      </p>
     </fieldset>
     <button id="bookNowBtn" type="submit">Book Now</button>
   </form>
@@ -130,6 +139,21 @@
       paxBlocks.appendChild(div);
     })(i);
   }
+
+  document.getElementById('addPaxBtn').addEventListener('click', function(){
+    var n = paxBlocks.children.length;
+    var div = document.createElement('div');
+    div.className = 'pax';
+    div.innerHTML =
+      '<strong>Passenger ' + (n+1) + '</strong><br>' +
+      '<label for="pax'+n+'Name">Name</label><input id="pax'+n+'Name" type="text"><br>' +
+      '<label for="pax'+n+'Age">Age</label><input id="pax'+n+'Age" type="text"><br>' +
+      '<label for="pax'+n+'Gender">Gender</label><select id="pax'+n+'Gender"><option value="">--</option>' +
+        genders.map(function(g){ return '<option>'+g+'</option>'; }).join('') + '</select><br>' +
+      '<label for="pax'+n+'Berth">Berth</label><select id="pax'+n+'Berth"><option value="">--</option>' +
+        berths.map(function(b){ return '<option>'+b+'</option>'; }).join('') + '</select>';
+    paxBlocks.appendChild(div);
+  });
 
   var form = document.getElementById('tatkalForm');
   form.addEventListener('submit', function(ev){

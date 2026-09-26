@@ -23,14 +23,16 @@
  * - G4: when the engine emits OTP_REQUIRED, the native OTP overlay appears.
  *   OTP entry is manual in v1; the SMS User Consent native module plugs in
  *   at the marked OTP_AUTO_HOOK later.
- * - G5: the ONLY booking-submit path in the product is
- *   window.__tatkalUserConfirm(), invoked from exactly ONE native call site
- *   below, itself behind the explicit "Review & Book on IRCTC" tap.
+ * - G5: there is NO booking-submit path in the product. The injected fill
+ *   script contains zero submit capability (scanForAutobookViolations
+ *   asserts this), and no code in this file clicks any of IRCTC's buttons.
+ *   After the form fills, the user reviews it and taps IRCTC's own
+ *   Continue / Book / Pay buttons themselves, by hand.
  *
- * DEVICE-TEST ITEMS (not verifiable here): the engine's DOM ids
- * (trainNo/fromStn/…/bookNowBtn/otpInput) are validated against the L2 mock
- * harness only — they must be mapped to IRCTC's live DOM on a real device
- * before any real 10:00 attempt.
+ * DEVICE-TEST ITEMS (not verifiable here): the engine's label-based locators
+ * (placeholder / visible-label / attribute text) are validated against the
+ * realistic mock harness only — they must be confirmed against IRCTC's live
+ * DOM on a real device before any real 10:00 attempt.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -58,7 +60,6 @@ import { isAllowedUrl } from '../core/privacy';
 import {
   buildFillScript,
   buildFormProbeScript,
-  CONFIRM_FN_NAME,
   type FillEvent,
   type FillPlan,
 } from '../core/fillEngine';
@@ -73,17 +74,16 @@ const STOCK_CHROME_MOBILE_UA =
   'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
 
 // ---------------------------------------------------------------------------
-// G5 — THE single permitted booking-submit call site in the native app.
-// It only invokes window.__tatkalUserConfirm(), which exists solely inside
-// the user-tap gate in the injected fill script (see fillEngine.ts).
-// Nothing else in this codebase may reference CONFIRM_FN_NAME.
-// Grep to audit: __tatkalUserConfirm
+// NO auto-submit, anywhere. The injected fill script contains zero submit
+// capability (see fillEngine.ts — scanForAutobookViolations asserts this),
+// and there is deliberately no code path in this file that clicks any of
+// IRCTC's buttons. The user reviews the filled form and taps Continue /
+// Book / Pay on IRCTC's page themselves, by hand.
 // ---------------------------------------------------------------------------
 
 // Payment-app intents (upi://, phonepe://, …) open in the user's OWN app —
 // the user pays there, by hand. The copilot never touches money.
 const PAYMENT_INTENT_RE = /^(upi|phonepe|tez|paytmmp|bhim):/i;
-const USER_CONFIRM_JS = `window.${CONFIRM_FN_NAME}();true;`;
 
 type FillState = 'idle' | 'filling' | 'done';
 
@@ -200,6 +200,8 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
       classCode: trip.classCode,
       quota: 'TATKAL',
       autoUpgradation: true, // "Consider for auto upgradation" stays ticked
+      contactMobile: trip.contactMobile ?? '',
+      travelInsurance: trip.travelInsurance ?? true,
       passengers: pax.map((p) => ({
         name: p.name,
         age: p.age,
@@ -269,8 +271,9 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
   // v1 is manual entry (boxes below). When the native module lands, it will
   // call setOtpDigits(parsedCode.split('')) after the system's one-tap
   // consent dialog — no RECEIVE_SMS/READ_SMS permission needed (see
-  // docs/IRCTC_RULES.md §5). Nothing here auto-submits: the user still taps
-  // "Review & Book on IRCTC" after verifying the OTP on the page.
+  // docs/IRCTC_RULES.md §5). Nothing here auto-submits: the user still
+  // reviews the filled form and taps IRCTC's own Continue button on the
+  // page themselves.
   const onPlaceOtp = useCallback(() => {
     const code = otpDigits.join('');
     if (code.length !== 6) return;
@@ -281,11 +284,8 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
     setOtpRequired(false);
   }, [otpDigits]);
 
-  // G5 call site — explicit user tap, after the user has reviewed the filled
-  // form and completed the Aadhaar OTP step themselves.
-  const onUserConfirmTap = useCallback(() => {
-    webRef.current?.injectJavaScript(USER_CONFIRM_JS);
-  }, []);
+  // (No confirm/book tap here — the user taps Continue / Book / Pay on
+  // IRCTC's page themselves. This file must never click IRCTC's buttons.)
 
   const otpComplete = otpDigits.every((d) => d !== '');
 
@@ -350,8 +350,8 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
           on the passenger page — details fill at human pace, then stop.
           {'\n'}2. "Consider for auto upgradation" is ticked for you —
           leave it checked.
-          {'\n'}3. Type the Aadhaar OTP yourself, review everything, then
-          tap "Review & Book on IRCTC".
+          {'\n'}3. Type the Aadhaar OTP yourself, review every filled field,
+          then tap IRCTC's own Continue button on their page.
           {'\n'}4. At payment, choose UPI → your UPI app (e.g. PhonePe):
           the payment opens in YOUR app and you pay there — the copilot
           hands the payment to you at that screen.
@@ -371,16 +371,10 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
           </Text>
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={[styles.confirm, fillState !== 'done' && styles.disabled]}
-          disabled={fillState !== 'done'}
-          onPress={onUserConfirmTap}
-        >
-          <Text style={styles.confirmText}>Review & Book on IRCTC</Text>
-        </TouchableOpacity>
         <Text style={styles.confirmNote}>
-          This taps IRCTC's own Book button for you — nothing books until you
-          tap this.
+          After the form fills, review every field on IRCTC's page yourself,
+          then tap IRCTC's own Continue button there — the app never taps
+          IRCTC's buttons for you.
         </Text>
         <Text style={styles.railOneNote}>
           Second lane: the official RailOne app books the same Tatkal quota

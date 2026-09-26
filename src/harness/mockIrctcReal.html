@@ -1,0 +1,144 @@
+<!doctype html>
+<!--
+  Realistic IRCTC passenger-details mock (no DOM ids on purpose).
+  Mirrors the device screenshots of 2026-09-26: a "Passenger Details" card
+  with "Full Name as per Govt. ID" / "Age" inputs, a PrimeNG-style Gender
+  dropdown, an Angular-Material-style Berth mat-select, a native Nationality
+  select, a "+ Add Passenger" button that appends blocks, Contact Details
+  with a Mobile Number input, and Other Preferences with the real
+  "Consider for Auto Upgradation" checkbox label and Travel Insurance radios.
+
+  The fill engine must locate every field by placeholder / aria-label /
+  visible label text — exactly like a human would — because IRCTC's real
+  Angular DOM ids are unknown.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IRCTC - Passenger Details</title>
+<style>
+  body { font-family: sans-serif; margin: 0; padding: 12px; background: #fff; color: #111; }
+  .card { border: 1px solid #ccc; border-radius: 8px; padding: 12px; margin-bottom: 12px; }
+  .pax-block { border: 1px dashed #999; border-radius: 6px; padding: 10px; margin-bottom: 10px; }
+  .pax-block input { display: block; width: 92%; margin: 6px 0; padding: 10px; font-size: 16px; }
+  .p-dropdown { position: relative; border: 1px solid #999; border-radius: 4px; padding: 10px; margin: 6px 0; width: 92%; cursor: pointer; }
+  .p-dropdown-panel { position: absolute; left: 0; right: 0; top: 100%; background: #fff; border: 1px solid #999; z-index: 5; }
+  .p-dropdown-item { padding: 10px; list-style: none; }
+  .p-dropdown-item:hover { background: #eee; }
+  mat-select { display: block; border: 1px solid #999; border-radius: 4px; padding: 10px; margin: 6px 0; width: 92%; cursor: pointer; }
+  .cdk-overlay { position: fixed; left: 8%; right: 8%; top: 30%; background: #fff; border: 2px solid #333; z-index: 50; }
+  .mat-option { padding: 12px; border-bottom: 1px solid #ddd; }
+  .mat-option:hover { background: #eee; }
+  select.native { display: block; margin: 6px 0; padding: 10px; font-size: 16px; }
+  button.add { color: #0b5fff; background: none; border: none; font-size: 16px; padding: 8px 0; cursor: pointer; }
+  label.row { display: block; margin: 8px 0; font-size: 15px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h2>Passenger Details</h2>
+  <div id="paxBlocks"></div>
+  <button class="add" type="button">+ Add Passenger/ Add Infant With Berth</button>
+</div>
+
+<div class="card">
+  <h2>Contact Details</h2>
+  <p>(Ticket details will be sent to email and registered mobile number)</p>
+  <input type="tel" id="mobileField" placeholder="Mobile Number" inputmode="numeric">
+</div>
+
+<div class="card">
+  <h2>Other Preferences</h2>
+  <label class="row"><input type="checkbox" id="autoUpg"> Consider for Auto Upgradation (In higher class you may or may not get lower berth)</label>
+  <h3>Travel Insurance (Incl. of GST)</h3>
+  <p>Do you want to take Travel Insurance (&#8377;0.45/person)?</p>
+  <label class="row"><input type="radio" name="travelIns" value="yes"> Yes, and I accept the <a href="#">terms &amp; conditions</a></label>
+  <label class="row"><input type="radio" name="travelIns" value="no"> No, I don't want travel insurance</label>
+</div>
+
+<script>
+(function(){
+  window.__formSubmits = 0;
+  var BERTHS = ['No Preference', 'Lower', 'Middle', 'Upper', 'Side Lower', 'Side Upper'];
+  var GENDERS = ['Male', 'Female', 'Transgender'];
+
+  function bindPrimeDropdown(dd, items, onPick) {
+    var label = dd.querySelector('.p-dropdown-label');
+    var panel = dd.querySelector('.p-dropdown-panel');
+    var list = dd.querySelector('ul');
+    list.innerHTML = '';
+    items.forEach(function (text) {
+      var li = document.createElement('li');
+      li.className = 'p-dropdown-item';
+      li.textContent = text;
+      li.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        label.textContent = text;
+        panel.hidden = true;
+        dd.setAttribute('data-value', text);
+        if (onPick) onPick(text);
+      });
+      list.appendChild(li);
+    });
+    dd.addEventListener('click', function () { panel.hidden = !panel.hidden; });
+  }
+
+  function bindMatSelect(ms, items) {
+    ms.addEventListener('click', function () {
+      closeOverlay();
+      var ov = document.createElement('div');
+      ov.className = 'cdk-overlay';
+      ov.id = 'matOverlay';
+      items.forEach(function (text) {
+        var o = document.createElement('div');
+        o.className = 'mat-option';
+        o.textContent = text;
+        o.addEventListener('click', function (ev) {
+          ev.stopPropagation();
+          ms.querySelector('.mat-select-value').textContent = text;
+          ms.setAttribute('data-value', text);
+          closeOverlay();
+        });
+        ov.appendChild(o);
+      });
+      document.body.appendChild(ov);
+    });
+  }
+  function closeOverlay() {
+    var ov = document.getElementById('matOverlay');
+    if (ov) ov.remove();
+  }
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest || !e.target.closest('mat-select')) closeOverlay();
+  });
+
+  function makeBlock() {
+    var div = document.createElement('div');
+    div.className = 'pax-block';
+    div.innerHTML =
+      '<input type="text" placeholder="Full Name as per Govt. ID">' +
+      '<input type="text" placeholder="Age" inputmode="numeric">' +
+      '<div class="p-dropdown" data-name="gender"><span class="p-dropdown-label">Gender</span><span> &#9662;</span>' +
+      '<div class="p-dropdown-panel" hidden><ul></ul></div></div>' +
+      '<mat-select placeholder="Berth Preference" data-name="berth"><span class="mat-select-value">No Preference</span><span> &#9662;</span></mat-select>' +
+      '<select class="native" aria-label="Nationality"><option>India</option><option>USA</option></select>';
+    bindPrimeDropdown(div.querySelector('.p-dropdown'), GENDERS);
+    bindMatSelect(div.querySelector('mat-select'), BERTHS);
+    return div;
+  }
+
+  var blocks = document.getElementById('paxBlocks');
+  blocks.appendChild(makeBlock());
+  document.querySelector('button.add').addEventListener('click', function () {
+    blocks.appendChild(makeBlock());
+  });
+
+  document.addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    window.__formSubmits += 1;
+  });
+})();
+</script>
+</body>
+</html>
