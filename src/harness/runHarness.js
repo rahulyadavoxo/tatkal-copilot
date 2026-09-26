@@ -66,6 +66,7 @@ const PLAN = {
   dateISO: '2026-09-27',
   classCode: '3A',
   quota: 'TATKAL',
+  autoUpgradation: true,
   passengers: [
     { name: 'Aarav Sharma', age: 34, gender: 'M', berthPref: 'LB' },
     { name: 'Diya Sharma', age: 31, gender: 'F', berthPref: 'MB' },
@@ -109,8 +110,15 @@ async function waitForEvent(page, type, timeoutMs) {
         fail(`G1: FIELD_FILLED count ${filled.length} != action count ${actions.length}`);
       }
 
-      // G1: every field holds the right value.
+      // G1: every field holds the right value (checkboxes: checked state).
       for (const a of actions) {
+        if (a.kind === 'checkbox') {
+          const checked = await page.$eval('#' + a.id, (el) => el.checked);
+          if (checked !== (a.value !== 'off')) {
+            fail(`G1: checkbox #${a.id} checked=${checked}, expected value ${JSON.stringify(a.value)}`);
+          }
+          continue;
+        }
         const val = await page.$eval('#' + a.id, (el) => el.value);
         if (val !== a.value) {
           fail(`G1: field #${a.id} = ${JSON.stringify(val)}, expected ${JSON.stringify(a.value)}`);

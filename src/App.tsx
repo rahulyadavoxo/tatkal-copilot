@@ -23,7 +23,7 @@ export type Route =
   | { name: 'home' }
   | { name: 'passengers' }
   | { name: 'pnr' }
-  | { name: 'tripSetup' }
+  | { name: 'tripSetup'; tripId?: string }
   | { name: 'countdown'; tripId: string }
   | { name: 'booking'; tripId: string }
   | { name: 'trainLookup' }
@@ -53,7 +53,9 @@ export default function App() {
         {route.name === 'home' && <HomeScreen nav={nav} />}
         {route.name === 'passengers' && <PassengersScreen nav={nav} />}
         {route.name === 'pnr' && <PnrScreen nav={nav} />}
-        {route.name === 'tripSetup' && <TripSetupScreen nav={nav} />}
+        {route.name === 'tripSetup' && (
+          <TripSetupScreen nav={nav} tripId={route.tripId} />
+        )}
         {route.name === 'countdown' && (
           <CountdownScreen nav={nav} tripId={route.tripId} />
         )}

@@ -52,9 +52,16 @@ export default function HomeScreen({ nav }: { nav: Nav }) {
               <Text style={styles.cardTitle}>
                 {item.trainNo} · {item.from} → {item.to}
               </Text>
-              <TouchableOpacity onPress={() => removeTrip(item.id)}>
-                <Text style={styles.delete}>✕</Text>
-              </TouchableOpacity>
+              <View style={styles.cardActions}>
+                <TouchableOpacity
+                  onPress={() => nav.go({ name: 'tripSetup', tripId: item.id })}
+                >
+                  <Text style={styles.edit}>✎ Edit</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => removeTrip(item.id)}>
+                  <Text style={styles.delete}>✕</Text>
+                </TouchableOpacity>
+              </View>
             </View>
             <Text style={styles.cardSub}>
               {item.journeyDate} · {item.classCode}
@@ -107,6 +114,8 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   cardRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  cardActions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  edit: { color: C.lime, fontSize: 14, fontWeight: '700', padding: 4 },
   cardTitle: { color: C.ink, fontSize: 16, fontWeight: '700' },
   cardSub: { color: C.muted, fontSize: 12, marginTop: 4 },
   delete: { color: C.danger, fontSize: 16, padding: 4 },

@@ -5,10 +5,14 @@
  *   (never iframed) with a stock mobile-Chrome user agent
  *   (docs/IRCTC_RULES.md §5: default WebView UAs are a fingerprint risk).
  * - G9: onShouldStartLoadWithRequest enforces the irctc.co.in allowlist
- *   (src/core/privacy.ts). Payment-gateway handoff WILL be blocked until
- *   payment domains are explicitly reviewed in — see privacy.ts note.
+ *   (src/core/privacy.ts). Payment-app intents (upi://, phonepe://, …) are NOT
+ *   loaded in the WebView — they open in the user's own app so the user pays
+ *   there by hand; https payment-gateway pages stay blocked until explicitly
+ *   reviewed in — see privacy.ts note.
  * - The fill script (src/core/fillEngine.ts) fires ONLY on the explicit
- *   "Fill my form" tap, paced by the engine (G2). The engine never submits.
+ *   "Fill my form" tap, paced by the engine (G2). It fills passengers and
+ *   ticks "Consider for auto upgradation" (the user's stated preference).
+ *   The engine never submits.
  * - G4: when the engine emits OTP_REQUIRED, the native OTP overlay appears.
  *   OTP entry is manual in v1; the SMS User Consent native module plugs in
  *   at the marked OTP_AUTO_HOOK later.
@@ -23,6 +27,7 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Linking,
   ScrollView,
   StyleSheet,
   Text,
@@ -63,6 +68,10 @@ const STOCK_CHROME_MOBILE_UA =
 // Nothing else in this codebase may reference CONFIRM_FN_NAME.
 // Grep to audit: __tatkalUserConfirm
 // ---------------------------------------------------------------------------
+
+// Payment-app intents (upi://, phonepe://, …) open in the user's OWN app —
+// the user pays there, by hand. The copilot never touches money.
+const PAYMENT_INTENT_RE = /^(upi|phonepe|tez|paytmmp|bhim):/i;
 const USER_CONFIRM_JS = `window.${CONFIRM_FN_NAME}();true;`;
 
 type FillState = 'idle' | 'filling' | 'done';
@@ -75,6 +84,8 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
   const [otpRequired, setOtpRequired] = useState(false);
   const [otpDigits, setOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
   const [blockedUrl, setBlockedUrl] = useState<string | null>(null);
+  const [paymentHandoff, setPaymentHandoff] = useState(false);
+  const [paymentHandoffError, setPaymentHandoffError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const otpRefs = useRef<Array<TextInput | null>>([]);
 
@@ -102,9 +113,19 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
   );
 
   const onShouldStartLoadWithRequest = useCallback((req: ShouldStartLoadRequest) => {
-    const ok = isAllowedUrl(req.url);
-    if (!ok) setBlockedUrl(req.url);
-    return ok; // G9: only irctc.co.in loads
+    const url = req.url;
+    // A UPI/wallet payment intent: hand it to the user's own app so they can
+    // pay there themselves, then come back. Returning false stops the WebView
+    // from trying to load it (it can't — these aren't web pages).
+    if (PAYMENT_INTENT_RE.test(url)) {
+      setPaymentHandoff(true);
+      setPaymentHandoffError(null);
+      void Linking.openURL(url).catch(() => setPaymentHandoffError(url));
+      return false;
+    }
+    const ok = isAllowedUrl(url);
+    if (!ok) setBlockedUrl(url);
+    return ok; // G9: only irctc.co.in loads in the WebView
   }, []);
 
   const buildPlan = useCallback(async (): Promise<FillPlan | null> => {
@@ -121,6 +142,7 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
       dateISO: trip.journeyDate,
       classCode: trip.classCode,
       quota: 'TATKAL',
+      autoUpgradation: true, // "Consider for auto upgradation" stays ticked
       passengers: pax.map((p) => ({
         name: p.name,
         age: p.age,
@@ -189,18 +211,37 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
       </View>
 
       {loadError && <Text style={styles.error}>IRCTC failed to load: {loadError}</Text>}
+      {paymentHandoff && (
+        <Text style={styles.payNote}>
+          💳 Payment opened in your UPI app — complete it there yourself,
+          then check your PNR on IRCTC. The copilot never touches your money.
+        </Text>
+      )}
+      {paymentHandoffError && (
+        <Text style={styles.warn}>
+          Couldn't open your UPI app for the payment. Complete the payment
+          manually — your booking is waiting on IRCTC's page.
+        </Text>
+      )}
       {blockedUrl && (
         <Text style={styles.warn}>
-          Blocked non-IRCTC navigation (G9): {blockedUrl.slice(0, 80)}
+          Blocked non-IRCTC navigation (G9): {blockedUrl.slice(0, 80)}{'\n'}
+          If this was a PAYMENT page, note its exact address and tell the
+          developer — payment hosts are only added after a manual review.
         </Text>
       )}
 
       <ScrollView style={styles.panel} contentContainerStyle={styles.panelInner}>
         <Text style={styles.hint}>
-          1. Log in to IRCTC above and open the Tatkal booking page for your train.
-          {'\n'}2. Tap “Fill my form” — fields fill at human pace, then stop.
-          {'\n'}3. Complete the Aadhaar OTP on the page, review everything,
-          then tap “Review & Book on IRCTC”.
+          1. Pick your class on IRCTC's train list, then tap "Fill my form"
+          on the passenger page — details fill at human pace, then stop.
+          {'\n'}2. "Consider for auto upgradation" is ticked for you —
+          leave it checked.
+          {'\n'}3. Type the Aadhaar OTP yourself, review everything, then
+          tap "Review & Book on IRCTC".
+          {'\n'}4. At payment, choose UPI → your UPI app (e.g. PhonePe):
+          the payment opens in YOUR app and you pay there — the copilot
+          hands the payment to you at that screen.
         </Text>
 
         <TouchableOpacity
@@ -309,6 +350,10 @@ const styles = StyleSheet.create({
   },
   confirmText: { color: C.lime, fontSize: 16, fontWeight: '800' },
   confirmNote: { color: C.muted, fontSize: 12, textAlign: 'center', marginTop: 6 },
+  payNote: {
+    color: C.lime, fontSize: 12, fontWeight: '700',
+    paddingHorizontal: 14, paddingTop: 6, lineHeight: 17,
+  },
   railOneNote: {
     color: C.muted, fontSize: 12, textAlign: 'center', marginTop: 8,
     borderColor: C.line, borderWidth: 1, borderRadius: 8, padding: 8, lineHeight: 17,

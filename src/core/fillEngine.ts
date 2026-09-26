@@ -3,7 +3,9 @@
  *
  * Builds a self-contained JS payload for injection into a WebView hosting
  * IRCTC's Tatkal booking page. The payload fills train / class / quota /
- * passenger fields at human pace and then STOPS. It never submits anything.
+ * passenger fields at human pace, ticks the "Consider for auto upgradation"
+ * checkbox (the user's stated preference), and then STOPS. It never submits
+ * anything.
  *
  * Hard lines enforced here:
  *  - Total fill time respects the anti-bot floor from src/core/tatkalConfig.ts
@@ -33,13 +35,16 @@ export interface FillPlan {
   dateISO: string; // YYYY-MM-DD
   classCode: string; // '3A' | '2A' | 'SL' | ...
   quota: 'TATKAL';
+  /** IRCTC "Consider for auto upgradation" checkbox — the fill ticks it
+   *  (the user's stated preference; IRCTC defaults it on anyway). */
+  autoUpgradation: boolean;
   passengers: PassengerInput[];
 }
 
 export interface FieldAction {
   id: string; // DOM element id in the booking page
-  kind: 'input' | 'select';
-  value: string;
+  kind: 'input' | 'select' | 'checkbox';
+  value: string; // for checkboxes: 'on' | 'off'
   label: string; // human-readable, used in the event log
 }
 
@@ -134,6 +139,13 @@ export function buildFieldActions(plan: FillPlan): FieldAction[] {
       { id: `pax${i}Gender`, kind: 'select', value: p.gender, label: `pax${i}.gender` },
       { id: `pax${i}Berth`, kind: 'select', value: p.berthPref, label: `pax${i}.berth` },
     );
+  });
+  // Other-preference: auto-upgradation checkbox, ticked per the plan.
+  actions.push({
+    id: 'autoUpgradation',
+    kind: 'checkbox',
+    value: plan.autoUpgradation ? 'on' : 'off',
+    label: 'auto-upgradation',
   });
   return actions;
 }
@@ -246,7 +258,12 @@ function setField(a){
   var el = document.getElementById(a.id);
   if (!el) { post('FIELD_MISSING', { id: a.id, label: a.label }); return; }
   try { el.focus(); } catch (err) {}
-  el.value = a.value;
+  if (a.kind === 'checkbox') {
+    // @ts-ignore checkbox inputs expose .checked
+    el.checked = (a.value !== 'off');
+  } else {
+    el.value = a.value;
+  }
   el.dispatchEvent(new Event('input', { bubbles: true }));
   el.dispatchEvent(new Event('change', { bubbles: true }));
   post('FIELD_FILLED', { id: a.id, label: a.label });

@@ -1,11 +1,12 @@
 /**
  * TripSetup — journey details + class + passenger selection.
  * "Save trip" persists (encrypted) and moves to the Countdown screen.
+ * With a tripId it edits that trip in place (prefilled once on entry).
  *
  * Tatkal PNR cap (MAX_PASSENGERS_PER_TATKAL_PNR = 4) is enforced in the UI:
  * once 4 are selected, the rest disable.
  */
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   ScrollView,
   StyleSheet,
@@ -35,7 +36,13 @@ import StationField from './StationField';
 import TrainField from './TrainField';
 import DatePickerField from './DatePickerField';
 
-export default function TripSetupScreen({ nav }: { nav: Nav }) {
+export default function TripSetupScreen({
+  nav,
+  tripId,
+}: {
+  nav: Nav;
+  tripId?: string;
+}) {
   const [passengers, setPassengers] = useState<Passenger[]>([]);
   const [trainNo, setTrainNo] = useState('');
   const [from, setFrom] = useState('');
@@ -44,8 +51,27 @@ export default function TripSetupScreen({ nav }: { nav: Nav }) {
   const [classCode, setClassCode] = useState<string>('3A');
   const [selected, setSelected] = useState<string[]>([]);
   const [error, setError] = useState('');
+  const prefilled = useRef(false);
 
-  const reload = useCallback(async () => setPassengers(await loadPassengers()), []);
+  const editing = !!tripId;
+
+  const reload = useCallback(async () => {
+    setPassengers(await loadPassengers());
+    // Prefill once when editing an existing trip (never clobber typing on
+    // later focuses — useFocusLoad fires every time the screen gains focus).
+    if (editing && tripId && !prefilled.current) {
+      const trip = (await loadTrips()).find((t) => t.id === tripId);
+      if (trip) {
+        setTrainNo(trip.trainNo);
+        setFrom(trip.from);
+        setTo(trip.to);
+        setJourneyDate(trip.journeyDate);
+        setClassCode(trip.classCode);
+        setSelected(trip.passengerIds);
+        prefilled.current = true;
+      }
+    }
+  }, [editing, tripId]);
   useFocusLoad(reload);
 
   const isAC = (TATKAL_AC_CLASSES as readonly string[]).includes(classCode);
@@ -94,7 +120,7 @@ export default function TripSetupScreen({ nav }: { nav: Nav }) {
       return;
     }
     const trip: Trip = {
-      id: newId('trip'),
+      id: editing && tripId ? tripId : newId('trip'),
       trainNo: t,
       from: f,
       to: tt,
@@ -106,7 +132,11 @@ export default function TripSetupScreen({ nav }: { nav: Nav }) {
     };
     const trips = await loadTrips();
     try {
-      await saveTrips([...trips, trip]);
+      // Edit mode replaces the existing trip in place (keeping its id so the
+      // countdown screen keeps working); new mode appends.
+      await saveTrips(
+        editing ? trips.map((x) => (x.id === trip.id ? { ...trip, createdAt: x.createdAt } : x)) : [...trips, trip],
+      );
     } catch (e) {
       setError(
         'Could not save the trip — storage unavailable. ' +
@@ -125,7 +155,7 @@ export default function TripSetupScreen({ nav }: { nav: Nav }) {
       contentContainerStyle={styles.inner}
       keyboardShouldPersistTaps="handled"
     >
-      <Text style={styles.title}>New trip</Text>
+      <Text style={styles.title}>{editing ? 'Edit trip' : 'New trip'}</Text>
 
       <TrainField
         label="Train"
@@ -198,7 +228,9 @@ export default function TripSetupScreen({ nav }: { nav: Nav }) {
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
       <TouchableOpacity style={styles.primary} onPress={save}>
-        <Text style={styles.primaryText}>Save trip → Countdown</Text>
+        <Text style={styles.primaryText}>
+          {editing ? 'Save changes → Countdown' : 'Save trip → Countdown'}
+        </Text>
       </TouchableOpacity>
       <TouchableOpacity style={styles.back} onPress={nav.back}>
         <Text style={styles.backText}>← Back</Text>

@@ -21,6 +21,7 @@ const FOUR_PAX: FillPlan = {
   dateISO: '2026-09-27',
   classCode: '3A',
   quota: 'TATKAL',
+  autoUpgradation: true,
   passengers: [
     { name: 'Aarav Sharma', age: 34, gender: 'M', berthPref: 'LB' },
     { name: 'Diya Sharma', age: 31, gender: 'F', berthPref: 'MB' },
@@ -29,10 +30,10 @@ const FOUR_PAX: FillPlan = {
   ],
 };
 
-const FIELD_COUNT_4PAX = 6 + 4 * 4; // 22
+const FIELD_COUNT_4PAX = 6 + 4 * 4 + 1; // 23 (6 header + 16 pax + auto-upgradation checkbox)
 
 describe('pacing math', () => {
-  test('22 fields (4 pax): every gap >= 120ms and total >= 4.2s floor', () => {
+  test('23 fields (4 pax): every gap >= 120ms and total >= 4.2s floor', () => {
     const gaps = computeFieldGaps(FIELD_COUNT_4PAX, 1234);
     expect(gaps).toHaveLength(FIELD_COUNT_4PAX);
     for (const g of gaps) expect(g).toBeGreaterThanOrEqual(MIN_FIELD_GAP_MS);
@@ -74,13 +75,32 @@ describe('pacing math', () => {
     expect(s1).toBe(s2);
   });
 
-  test('field actions cover train/class/quota + 4 fields per passenger', () => {
+  test('field actions cover train/class/quota + 4 fields per passenger + auto-upgradation checkbox', () => {
     const actions = buildFieldActions(FOUR_PAX);
     expect(actions).toHaveLength(FIELD_COUNT_4PAX);
     expect(actions.map((a) => a.id)).toContain('trainNo');
     expect(actions.map((a) => a.id)).toContain('quota');
     expect(actions.find((a) => a.id === 'quota')?.value).toBe('TATKAL');
     expect(actions.map((a) => a.id)).toContain('pax3Berth');
+    const last = actions[actions.length - 1];
+    expect(last).toMatchObject({
+      id: 'autoUpgradation',
+      kind: 'checkbox',
+      value: 'on',
+    });
+    // A plan that opts out produces an untick action instead.
+    const off = buildFieldActions({ ...FOUR_PAX, autoUpgradation: false });
+    expect(off[off.length - 1]).toMatchObject({
+      id: 'autoUpgradation',
+      kind: 'checkbox',
+      value: 'off',
+    });
+  });
+
+  test('generated script sets the checkbox via .checked, not .value', () => {
+    const src = buildFillScript(FOUR_PAX, { seed: 9 });
+    expect(src).toContain("kind === 'checkbox'");
+    expect(src).toContain('el.checked');
   });
 });
 
