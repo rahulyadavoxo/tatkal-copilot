@@ -52,4 +52,21 @@ describe('vault (G3)', () => {
     const vault = createVault({ getKey: async () => randomBytes(16) });
     await expect(vault.encryptJSON({})).rejects.toThrow('32-byte');
   });
+
+  test('injected RNG is used for the nonce (on-device expo-crypto path)', async () => {
+    // On Hermes, noble's randomBytes throws (no crypto.getRandomValues), so
+    // the app injects expo-crypto's native RNG. Prove the injection point.
+    const fixed = new Uint8Array(12).fill(9);
+    const seen: number[] = [];
+    const rng = async (n: number) => {
+      seen.push(n);
+      return fixed;
+    };
+    const vault = createVault({ getKey: async () => keyOf(8) }, rng);
+    const env = await vault.encryptJSON({ x: 1 });
+    expect(seen).toEqual([12]);
+    const nonceBytes = Buffer.from(env.split('.')[1], 'base64');
+    expect(Array.from(nonceBytes)).toEqual(Array(12).fill(9));
+    expect(await vault.decryptJSON(env)).toEqual({ x: 1 });
+  });
 });

@@ -228,6 +228,11 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
           This taps IRCTC's own Book button for you — nothing books until you
           tap this.
         </Text>
+        <Text style={styles.railOneNote}>
+          Second lane: the official RailOne app books the same Tatkal quota
+          (same IRCTC backend). Its pre-loaded wallet can pay faster than
+          UPI/bank redirects at 10:00.
+        </Text>
 
         {events.length > 0 && (
           <View style={styles.log}>
@@ -304,6 +309,10 @@ const styles = StyleSheet.create({
   },
   confirmText: { color: C.lime, fontSize: 16, fontWeight: '800' },
   confirmNote: { color: C.muted, fontSize: 12, textAlign: 'center', marginTop: 6 },
+  railOneNote: {
+    color: C.muted, fontSize: 12, textAlign: 'center', marginTop: 8,
+    borderColor: C.line, borderWidth: 1, borderRadius: 8, padding: 8, lineHeight: 17,
+  },
   disabled: { opacity: 0.4 },
   error: { color: C.danger, fontSize: 12, paddingHorizontal: 14, paddingTop: 6 },
   warn: { color: C.danger, fontSize: 11, paddingHorizontal: 14, paddingTop: 4 },

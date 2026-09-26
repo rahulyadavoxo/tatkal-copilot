@@ -32,6 +32,8 @@ import {
 } from '../vaultStore';
 import type { Nav } from '../App';
 import { useFocusLoad } from './hooks';
+import StationField from './StationField';
+import DatePickerField from './DatePickerField';
 
 export default function TripSetupScreen({ nav }: { nav: Nav }) {
   const [passengers, setPassengers] = useState<Passenger[]>([]);
@@ -64,19 +66,31 @@ export default function TripSetupScreen({ nav }: { nav: Nav }) {
     const f = from.trim().toUpperCase();
     const tt = to.trim().toUpperCase();
     const d = journeyDate.trim();
-    if (!t || !f || !tt) {
-      setError('Train number, from and to station codes are required.');
+    if (!/^\d{5}$/.test(t)) {
+      setError('Train number must be exactly 5 digits — use “Find train number” below if you don’t know it.');
+      return;
+    }
+    if (!f || !tt) {
+      setError('Pick the from and to stations from the search list.');
+      return;
+    }
+    if (f === tt) {
+      setError('From and to stations can’t be the same.');
       return;
     }
     if (selected.length === 0) {
       setError('Select at least one passenger.');
       return;
     }
+    if (!d) {
+      setError('Pick the journey date from the calendar.');
+      return;
+    }
     // Validate the date by running the real window math (throws on bad input).
     try {
       tatkalBookingOpen(d, isAC, TATKAL_TIMING);
     } catch {
-      setError('Journey date must be real and in YYYY-MM-DD format.');
+      setError('That journey date is outside the booking window.');
       return;
     }
     const trip: Trip = {
@@ -91,7 +105,15 @@ export default function TripSetupScreen({ nav }: { nav: Nav }) {
       createdAt: Date.now(),
     };
     const trips = await loadTrips();
-    await saveTrips([...trips, trip]);
+    try {
+      await saveTrips([...trips, trip]);
+    } catch (e) {
+      setError(
+        'Could not save the trip — storage unavailable. ' +
+          String(e instanceof Error ? e.message : e),
+      );
+      return;
+    }
     nav.go({ name: 'countdown', tripId: trip.id });
   };
 
@@ -107,45 +129,24 @@ export default function TripSetupScreen({ nav }: { nav: Nav }) {
         placeholder="e.g. 12430"
         placeholderTextColor={C.muted}
         keyboardType="numeric"
+        maxLength={5}
         value={trainNo}
-        onChangeText={setTrainNo}
+        onChangeText={(t) => setTrainNo(t.replace(/[^0-9]/g, ''))}
       />
+      <TouchableOpacity onPress={() => nav.go({ name: 'trainLookup' })}>
+        <Text style={styles.link}>🔍 Don’t know the train number? Find it on IRCTC →</Text>
+      </TouchableOpacity>
 
       <View style={styles.row}>
         <View style={styles.half}>
-          <Text style={styles.label}>From (code)</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="NDLS"
-            placeholderTextColor={C.muted}
-            autoCapitalize="characters"
-            maxLength={5}
-            value={from}
-            onChangeText={setFrom}
-          />
+          <StationField label="From" value={from} onSelect={setFrom} placeholder="Type station…" />
         </View>
         <View style={styles.half}>
-          <Text style={styles.label}>To (code)</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="LKO"
-            placeholderTextColor={C.muted}
-            autoCapitalize="characters"
-            maxLength={5}
-            value={to}
-            onChangeText={setTo}
-          />
+          <StationField label="To" value={to} onSelect={setTo} placeholder="Type station…" />
         </View>
       </View>
 
-      <Text style={styles.label}>Journey date (YYYY-MM-DD)</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="2026-10-15"
-        placeholderTextColor={C.muted}
-        value={journeyDate}
-        onChangeText={setJourneyDate}
-      />
+      <DatePickerField label="Journey date" value={journeyDate} onSelect={setJourneyDate} />
 
       <Text style={styles.label}>Class — AC opens 10:00, Non-AC opens 11:00 IST</Text>
       <Text style={styles.groupLabel}>AC classes</Text>
@@ -242,6 +243,7 @@ const styles = StyleSheet.create({
   paxText: { color: C.ink, fontSize: 14 },
   paxTextOn: { fontWeight: '700' },
   error: { color: C.danger, fontSize: 13, marginTop: 10 },
+  link: { color: C.lime, fontSize: 13, fontWeight: '700', marginTop: 6 },
   primary: {
     backgroundColor: C.lime, borderRadius: 10, padding: 14,
     alignItems: 'center', marginTop: 16,

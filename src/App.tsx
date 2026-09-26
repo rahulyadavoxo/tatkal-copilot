@@ -17,6 +17,7 @@ import PnrScreen from './screens/PnrScreen';
 import TripSetupScreen from './screens/TripSetupScreen';
 import CountdownScreen from './screens/CountdownScreen';
 import BookingScreen from './screens/BookingScreen';
+import TrainLookupScreen from './screens/TrainLookupScreen';
 
 export type Route =
   | { name: 'home' }
@@ -24,7 +25,8 @@ export type Route =
   | { name: 'pnr' }
   | { name: 'tripSetup' }
   | { name: 'countdown'; tripId: string }
-  | { name: 'booking'; tripId: string };
+  | { name: 'booking'; tripId: string }
+  | { name: 'trainLookup' };
 
 export interface Nav {
   go: (r: Route) => void;
@@ -55,6 +57,7 @@ export default function App() {
           <CountdownScreen nav={nav} tripId={route.tripId} />
         )}
         {route.name === 'booking' && <BookingScreen nav={nav} tripId={route.tripId} />}
+        {route.name === 'trainLookup' && <TrainLookupScreen nav={nav} />}
       </ErrorBoundary>
     </SafeAreaView>
   );

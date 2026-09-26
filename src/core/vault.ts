@@ -11,6 +11,16 @@ export interface KeyProvider {
   getKey(): Promise<Uint8Array>; // must resolve to exactly 32 bytes
 }
 
+/**
+ * Random-byte source. Injectable because the default (noble's randomBytes,
+ * which needs `crypto.getRandomValues`) does NOT exist on React Native's
+ * Hermes engine — on device the app MUST pass expo-crypto's native RNG.
+ * The default keeps Node/Jest and the headless harness working.
+ */
+export type Rng = (byteLength: number) => Promise<Uint8Array>;
+
+const defaultRng: Rng = async (n) => randomBytes(n);
+
 const NONCE_LEN = 12;
 const ENVELOPE_VERSION = 'v1';
 
@@ -46,7 +56,7 @@ function b64decode(s: string): Uint8Array {
   return new Uint8Array(out);
 }
 
-export function createVault(keyProvider: KeyProvider) {
+export function createVault(keyProvider: KeyProvider, rng: Rng = defaultRng) {
   async function readKey(): Promise<Uint8Array> {
     const key = await keyProvider.getKey();
     if (!(key instanceof Uint8Array) || key.length !== 32) {
@@ -58,7 +68,7 @@ export function createVault(keyProvider: KeyProvider) {
   /** Encrypt any JSON-serializable value. Returns an opaque envelope string. */
   async function encryptJSON(value: unknown): Promise<string> {
     const key = await readKey();
-    const nonce = randomBytes(NONCE_LEN);
+    const nonce = await rng(NONCE_LEN);
     const plaintext = new TextEncoder().encode(JSON.stringify(value));
     const ciphertext = gcm(key, nonce).encrypt(plaintext);
     return `${ENVELOPE_VERSION}.${b64encode(nonce)}.${b64encode(ciphertext)}`;

@@ -12,8 +12,8 @@
  * Storage keys are versioned ('-v1') so a future schema change can migrate.
  */
 import * as SecureStore from 'expo-secure-store';
-import { randomBytes } from '@noble/ciphers/utils.js';
-import { createVault, type KeyProvider } from './core/vault';
+import * as Crypto from 'expo-crypto';
+import { createVault, type KeyProvider, type Rng } from './core/vault';
 
 const VAULT_KEY_ITEM = 'tatkal-vault-key';
 const PASSENGERS_ITEM = 'tatkal-passengers-v1';
@@ -105,7 +105,10 @@ export function getVaultKeyProvider(): KeyProvider {
         }
         cachedKey = bytes;
       } else {
-        const fresh = randomBytes(32);
+        // Native secure RNG (expo-crypto). noble's randomBytes needs
+        // crypto.getRandomValues, which does not exist on Hermes — using it
+        // here silently broke every save on real devices (2026-09-26).
+        const fresh = await Crypto.getRandomBytesAsync(32);
         await SecureStore.setItemAsync(VAULT_KEY_ITEM, bytesToB64(fresh));
         cachedKey = fresh;
       }
@@ -114,7 +117,10 @@ export function getVaultKeyProvider(): KeyProvider {
   };
 }
 
-const vault = () => createVault(getVaultKeyProvider());
+// Device RNG: expo-crypto's native secure random (works on Hermes).
+const deviceRng: Rng = (n: number) => Crypto.getRandomBytesAsync(n);
+
+const vault = () => createVault(getVaultKeyProvider(), deviceRng);
 
 // ---------------------------------------------------------------------------
 // Encrypted collections

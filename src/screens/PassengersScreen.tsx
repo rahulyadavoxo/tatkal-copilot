@@ -32,13 +32,23 @@ function blank(): Passenger {
 export default function PassengersScreen({ nav }: { nav: Nav }) {
   const [list, setList] = useState<Passenger[]>([]);
   const [editing, setEditing] = useState<Passenger | null>(null);
+  const [saveError, setSaveError] = useState('');
 
   const reload = useCallback(async () => setList(await loadPassengers()), []);
   useFocusLoad(reload);
 
   const persist = async (next: Passenger[]) => {
-    setList(next);
-    await savePassengers(next);
+    setSaveError('');
+    try {
+      await savePassengers(next);
+      setList(next);
+    } catch (e) {
+      // Never fake a success: if the encrypted write fails, say so loudly.
+      setSaveError(
+        'Could not save — storage unavailable. Your passenger was NOT saved. ' +
+          String(e instanceof Error ? e.message : e),
+      );
+    }
   };
 
   const saveEdit = async () => {
@@ -89,6 +99,8 @@ export default function PassengersScreen({ nav }: { nav: Nav }) {
           </View>
         )}
       />
+
+      {saveError ? <Text style={styles.error}>{saveError}</Text> : null}
 
       {editing ? (
         <View style={styles.form}>
@@ -204,4 +216,5 @@ const styles = StyleSheet.create({
   },
   secondaryText: { color: C.ink, fontSize: 14, fontWeight: '600' },
   back: { alignItems: 'center', padding: 12 },
+  error: { color: C.danger, fontSize: 13, marginBottom: 8 },
 });

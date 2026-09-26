@@ -94,8 +94,15 @@ export default function PnrScreen({ nav }: { nav: Nav }) {
   useFocusLoad(reload);
 
   const persist = async (next: TrackedPnr[]) => {
-    setList(next);
-    await savePnrs(next);
+    try {
+      await savePnrs(next);
+      setList(next);
+    } catch (e) {
+      setError(
+        'Could not save — storage unavailable. The PNR was NOT saved. ' +
+          String(e instanceof Error ? e.message : e),
+      );
+    }
   };
 
   const saveDraft = async () => {
