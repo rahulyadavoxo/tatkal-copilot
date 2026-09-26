@@ -2,8 +2,15 @@
  * Booking — the core screen (gates G2/G4/G5/G9 live here).
  *
  * - A native WebView loads https://www.irctc.co.in as a TOP-LEVEL document
- *   (never iframed) with a stock mobile-Chrome user agent
- *   (docs/IRCTC_RULES.md §5: default WebView UAs are a fingerprint risk).
+ *   (never iframed) with a stock mobile-Chrome user agent.
+ *   FIELD REPORT 2026-09-26: IRCTC's Akamai bot protection 403s the WebView
+ *   anyway (stock UA is NOT enough — the WebView is fingerprinted beyond
+ *   its UA string). The app does NOT try to evade this: on denial it shows
+ *   a "Continue in Chrome" fallback (expo-web-browser Custom Tab — genuine
+ *   Chrome identity, shared login). docs/IRCTC_RULES.md §5 updated.
+ * - "Fill my form" first injects a probe (buildFormProbeScript): the fill
+ *   only runs when the passenger-details page is actually open, otherwise
+ *   the user gets guidance instead of a silent no-op.
  * - G9: onShouldStartLoadWithRequest enforces the irctc.co.in allowlist
  *   (src/core/privacy.ts). Payment-app intents (upi://, phonepe://, …) are NOT
  *   loaded in the WebView — they open in the user's own app so the user pays
@@ -27,6 +34,7 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  BackHandler,
   Linking,
   ScrollView,
   StyleSheet,
@@ -35,6 +43,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
 import WebView, { type WebViewInstance } from '../webview';
 import type { WebViewMessageEvent } from 'react-native-webview';
 // Type-only deep imports: erased at compile time, so Metro never resolves them.
@@ -42,11 +51,13 @@ import type { WebViewMessageEvent } from 'react-native-webview';
 import type {
   ShouldStartLoadRequest,
   WebViewErrorEvent,
+  WebViewHttpErrorEvent,
 } from 'react-native-webview/lib/WebViewTypes';
 import { C } from '../theme';
 import { isAllowedUrl } from '../core/privacy';
 import {
   buildFillScript,
+  buildFormProbeScript,
   CONFIRM_FN_NAME,
   type FillEvent,
   type FillPlan,
@@ -87,7 +98,16 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
   const [paymentHandoff, setPaymentHandoff] = useState(false);
   const [paymentHandoffError, setPaymentHandoffError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // IRCTC's bot protection (Akamai) 403s the embedded WebView even with a
+  // stock Chrome UA (field report 2026-09-26). When that happens we do NOT
+  // try to sneak past it — we offer a real Chrome tab instead.
+  const [accessDenied, setAccessDenied] = useState(false);
+  const [canGoBack, setCanGoBack] = useState(false);
+  // Guidance shown when "Fill my form" is tapped but the passenger page
+  // isn't open yet (probe said no-form) — previously a silent no-op.
+  const [formNotice, setFormNotice] = useState<string | null>(null);
   const otpRefs = useRef<Array<TextInput | null>>([]);
+  const probeResolver = useRef<((ready: boolean, reason: string) => void) | null>(null);
 
   useEffect(() => {
     void loadTrips().then((ts) => setTrip(ts.find((t) => t.id === tripId) ?? null));
@@ -104,13 +124,50 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
     (ev: WebViewMessageEvent) => {
       try {
         const e = JSON.parse(ev.nativeEvent.data) as FillEvent;
-        if (e && typeof e.type === 'string') pushEvent(e);
+        if (e && typeof e.type === 'string') {
+          if (e.type === 'FORM_PROBE_RESULT') {
+            const r = probeResolver.current;
+            probeResolver.current = null;
+            if (r) {
+              const d = (e.data ?? {}) as { ready?: boolean; reason?: string };
+              r(!!d.ready, typeof d.reason === 'string' ? d.reason : 'error');
+            }
+            return;
+          }
+          pushEvent(e);
+        }
       } catch {
         /* non-engine messages ignored */
       }
     },
     [pushEvent],
   );
+
+  // Denial detection: Akamai serves its "Access Denied" page with HTTP 403
+  // on the original URL. onHttpError may not fire on all Android versions,
+  // so we also sniff the document title on every navigation.
+  const onHttpError = useCallback((e: WebViewHttpErrorEvent) => {
+    if (e.nativeEvent.statusCode === 403) setAccessDenied(true);
+  }, []);
+
+  const onNavigationStateChange = useCallback((navState: { canGoBack: boolean; title?: string }) => {
+    setCanGoBack(navState.canGoBack);
+    if (navState.title && /access denied/i.test(navState.title)) {
+      setAccessDenied(true);
+    } else if (navState.title) {
+      // A real page loaded — clear a stale denial flag on refire.
+      setAccessDenied(false);
+    }
+  }, []);
+
+  // Genuine Chrome tab (Custom Tabs): real browser identity, shared cookies
+  // with the user's Chrome — IRCTC serves it fine (verified on-device
+  // 2026-09-26). Used ONLY as the fallback when the WebView is blocked.
+  const openInChrome = useCallback(() => {
+    void WebBrowser.openBrowserAsync(IRCTC_URL).catch(() =>
+      Linking.openURL(IRCTC_URL),
+    );
+  }, []);
 
   const onShouldStartLoadWithRequest = useCallback((req: ShouldStartLoadRequest) => {
     const url = req.url;
@@ -153,12 +210,50 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
   }, [trip]);
 
   // Explicit user tap ONLY — there is no timer, no auto-fire path.
+  // First a probe checks the passenger-details page is actually open; if it
+  // isn't, we show guidance instead of running a silent no-op fill.
   const onFillTap = useCallback(async () => {
     if (fillState !== 'idle') return;
+    setFormNotice(null);
     const plan = await buildPlan();
     if (!plan) return;
+    const probeResult = await new Promise<{ ready: boolean; reason: string }>(
+      (resolve) => {
+        probeResolver.current = (ready, reason) => resolve({ ready, reason });
+        webRef.current?.injectJavaScript(buildFormProbeScript());
+        // If the page never answers (e.g. still loading), treat as no-form
+        // rather than hanging the button forever.
+        setTimeout(() => {
+          if (probeResolver.current) {
+            probeResolver.current = null;
+            resolve({ ready: false, reason: 'no-form' });
+          }
+        }, 3000);
+      },
+    );
+    if (!probeResult.ready) {
+      setFormNotice(
+        probeResult.reason === 'blocked'
+          ? 'IRCTC is blocking the in-app browser right now (Access Denied). Use “Continue in Chrome” above — you can still book there manually.'
+          : 'The passenger form isn\u2019t open on this page yet — select your train and class on IRCTC first, then tap “Fill my form” on the passenger-details page.',
+      );
+      return;
+    }
     webRef.current?.injectJavaScript(buildFillScript(plan));
   }, [fillState, buildPlan]);
+
+  // Hardware back: first step back inside the IRCTC page, otherwise let the
+  // app-level handler pop the screen (App.tsx). Never exits from here.
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (canGoBack) {
+        webRef.current?.goBack();
+        return true;
+      }
+      return false;
+    });
+    return () => sub.remove();
+  }, [canGoBack]);
 
   const onOtpDigit = (i: number, text: string) => {
     const ch = text.replace(/\D/g, '').slice(-1);
@@ -205,10 +300,28 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
           domStorageEnabled
           onMessage={onMessage}
           onShouldStartLoadWithRequest={onShouldStartLoadWithRequest}
+          onNavigationStateChange={onNavigationStateChange}
+          onHttpError={onHttpError}
           onError={(e: WebViewErrorEvent) => setLoadError(e.nativeEvent.description)}
           startInLoadingState
         />
       </View>
+
+      {accessDenied && (
+        <View style={styles.deniedBox}>
+          <Text style={styles.deniedTitle}>IRCTC blocked the in-app browser</Text>
+          <Text style={styles.deniedSub}>
+            IRCTC's protection (Access Denied) treats the in-app browser as a
+            bot — this is their rule and the app won't try to sneak past it.
+            Continue in a real Chrome tab: it shares your Chrome login and
+            IRCTC serves it normally.
+          </Text>
+          <TouchableOpacity style={styles.chromeBtn} onPress={openInChrome}>
+            <Text style={styles.chromeBtnText}>Continue in Chrome →</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      {formNotice && <Text style={styles.warn}>{formNotice}</Text>}
 
       {loadError && <Text style={styles.error}>IRCTC failed to load: {loadError}</Text>}
       {paymentHandoff && (
@@ -350,6 +463,16 @@ const styles = StyleSheet.create({
   },
   confirmText: { color: C.lime, fontSize: 16, fontWeight: '800' },
   confirmNote: { color: C.muted, fontSize: 12, textAlign: 'center', marginTop: 6 },
+  deniedBox: {
+    backgroundColor: C.card, borderColor: C.danger, borderWidth: 1,
+    borderRadius: 10, margin: 12, marginBottom: 0, padding: 12,
+  },
+  deniedTitle: { color: C.danger, fontSize: 14, fontWeight: '800', marginBottom: 4 },
+  deniedSub: { color: C.muted, fontSize: 12, lineHeight: 17, marginBottom: 10 },
+  chromeBtn: {
+    backgroundColor: C.lime, borderRadius: 8, padding: 12, alignItems: 'center',
+  },
+  chromeBtnText: { color: C.bg, fontSize: 15, fontWeight: '800' },
   payNote: {
     color: C.lime, fontSize: 12, fontWeight: '700',
     paddingHorizontal: 14, paddingTop: 6, lineHeight: 17,

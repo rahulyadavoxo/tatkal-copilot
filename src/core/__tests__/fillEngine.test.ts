@@ -5,7 +5,10 @@
 import {
   buildFieldActions,
   buildFillScript,
+  buildFormProbeScript,
   computeFieldGaps,
+  CONFIRM_FN_NAME,
+  findSubmitPatterns,
   MIN_FIELD_GAP_MS,
   mulberry32,
   parseAlternates,
@@ -167,5 +170,38 @@ describe('parseAlternates (G7)', () => {
 
   test('empty snapshot -> empty list (no crash)', () => {
     expect(parseAlternates('<div>no trains</div>')).toEqual([]);
+  });
+});
+
+describe('form probe (G2 pre-step)', () => {
+  test('probe posts exactly one FORM_PROBE_RESULT event', () => {
+    const src = buildFormProbeScript();
+    const matches = src.match(/FORM_PROBE_RESULT/g) ?? [];
+    // one in each branch: blocked / ready / error
+    expect(matches.length).toBe(3);
+    expect(src).toContain('window.ReactNativeWebView.postMessage');
+  });
+
+  test('probe carries the passenger-page heuristic, not mock DOM ids', () => {
+    const src = buildFormProbeScript();
+    expect(src).toMatch(/passenger/i);
+    expect(src).toContain('querySelectorAll');
+    // The probe must not depend on the mock harness ids — the live DOM is
+    // unverified, so id-based detection would always misfire there.
+    expect(src).not.toContain('trainNo');
+    expect(src).not.toContain('pax0Name');
+  });
+
+  test('probe detects the Access-Denied page as blocked', () => {
+    const src = buildFormProbeScript();
+    expect(src).toMatch(/access denied/i);
+    expect(src).toContain('edgesuite');
+    expect(src).toContain("reason: 'blocked'");
+  });
+
+  test('probe script has zero auto-book violations', () => {
+    expect(findSubmitPatterns(buildFormProbeScript())).toEqual([]);
+    // …and it carries no confirm gate at all (nothing to gate — it never submits).
+    expect(buildFormProbeScript()).not.toContain(CONFIRM_FN_NAME);
   });
 });

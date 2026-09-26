@@ -147,6 +147,30 @@ async function waitForEvent(page, type, timeoutMs) {
       await page.close();
     }
 
+    // ============ Phase A2: G2 pre-step — form probe =====================
+    // The probe must report ready=true on the passenger form page, exactly once.
+    {
+      const page = await browser.newPage();
+      await page.goto('file://' + MOCK + '?state=form');
+      await page.evaluate(`window.__tatkalEventLog = [];
+        window.ReactNativeWebView = { postMessage: (d) => {
+          try { window.__tatkalEventLog.push(JSON.parse(d)); } catch (e) {}
+        } };`);
+      await page.addScriptTag({ content: engine.buildFormProbeScript() });
+      await waitForEvent(page, 'FORM_PROBE_RESULT', 10000);
+      const log = await eventLog(page);
+      const probes = log.filter((e) => e.type === 'FORM_PROBE_RESULT');
+      if (probes.length !== 1) {
+        fail(`G2-probe: expected exactly 1 probe event, got ${probes.length}`);
+      }
+      if (!probes[0].data || probes[0].data.ready !== true) {
+        fail('G2-probe: expected ready=true on the passenger form, got ' +
+          JSON.stringify(probes[0].data));
+      }
+      console.log('PROBE_OK');
+      await page.close();
+    }
+
     // ============ Phase B: G4 — OTP screen halts the engine ============
     {
       const page = await browser.newPage();

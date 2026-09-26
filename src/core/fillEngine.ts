@@ -49,7 +49,7 @@ export interface FieldAction {
 }
 
 export interface FillEvent {
-  type: 'FILL_STARTED' | 'FIELD_FILLED' | 'FIELD_MISSING' | 'OTP_REQUIRED' | 'FILL_COMPLETE';
+  type: 'FILL_STARTED' | 'FIELD_FILLED' | 'FIELD_MISSING' | 'OTP_REQUIRED' | 'FILL_COMPLETE' | 'FORM_PROBE_RESULT';
   /** ms, from the page's performance.now() clock — relative, used for pacing math */
   t: number;
   data: Record<string, unknown>;
@@ -293,8 +293,67 @@ setTimeout(step, GAPS[0]);
 }
 
 // ---------------------------------------------------------------------------
+// Form probe — injected BEFORE any fill, on the explicit "Fill my form" tap.
+// The live IRCTC DOM ids are unverified (mock-validated only), so the probe
+// uses a heuristic: a page whose text mentions passengers AND has several
+// text inputs is treated as the passenger-details page. If the probe says
+// the form isn't there, native code shows guidance instead of running a
+// silent no-op fill (field report 2026-09-26: user tapped fill before the
+// booking page was open and nothing visibly happened).
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns a small self-contained script. When injected it posts exactly one
+ * FORM_PROBE_RESULT event: { ready: boolean, reason: 'ok' | 'no-form' |
+ * 'blocked' | 'error' }. 'blocked' means IRCTC served its Access-Denied page.
+ */
+export function buildFormProbeScript(): string {
+  return `(function(){
+function post(d){
+  try { window.ReactNativeWebView.postMessage(JSON.stringify(d)); } catch (e) {}
+}
+try {
+  var title = document.title || '';
+  var bodyText = '';
+  try { bodyText = (document.body ? document.body.innerText : '').slice(0, 4000); } catch (e) {}
+  var all = title + ' ' + bodyText;
+  if (/access denied/i.test(title) || /errors\\.edgesuite\\.net/i.test(all)) {
+    post({ type: 'FORM_PROBE_RESULT', t: 0, data: { ready: false, reason: 'blocked' } });
+    return;
+  }
+  var inputs = document.querySelectorAll('input[type="text"], input:not([type])').length;
+  var looksLikePax = /passenger/i.test(all) && inputs >= 3;
+  post({ type: 'FORM_PROBE_RESULT', t: 0, data: { ready: !!looksLikePax, reason: looksLikePax ? 'ok' : 'no-form' } });
+} catch (e) {
+  post({ type: 'FORM_PROBE_RESULT', t: 0, data: { ready: false, reason: 'error' } });
+}
+true;
+})();`;
+}
+
+// ---------------------------------------------------------------------------
 // No-auto-book invariant scanner (shared by Jest tests and the harness)
 // ---------------------------------------------------------------------------
+
+const FORBIDDEN_SUBMIT_PATTERNS: Array<[string, RegExp]> = [
+  ['form.submit() call', /\.submit\s*\(/],
+  ['requestSubmit() call', /\.requestSubmit\s*\(/],
+  ['booking button reference', /bookNowBtn/],
+  ['payment submit reference', /proceedToPayment|payNow|makePayment/i],
+];
+
+/**
+ * Returns the names of forbidden submit-related patterns found in `source`.
+ * Used by scanForAutobookViolations (fill script, gate-aware) and directly
+ * for scripts that must never submit at all (e.g. the form probe).
+ */
+export function findSubmitPatterns(source: string): string[] {
+  const hits: string[] = [];
+  for (const [name, re] of FORBIDDEN_SUBMIT_PATTERNS) {
+    if (re.test(source)) hits.push(name);
+  }
+  return hits;
+}
 
 /**
  * Returns a list of violations found in `source` OUTSIDE the
@@ -311,15 +370,7 @@ export function scanForAutobookViolations(source: string): string[] {
     hits.push('confirm-gate markers missing — cannot verify submit isolation');
   }
 
-  const forbidden: Array<[string, RegExp]> = [
-    ['form.submit() call', /\.submit\s*\(/],
-    ['requestSubmit() call', /\.requestSubmit\s*\(/],
-    ['booking button reference', /bookNowBtn/],
-    ['payment submit reference', /proceedToPayment|payNow|makePayment/i],
-  ];
-  for (const [name, re] of forbidden) {
-    if (re.test(body)) hits.push(name);
-  }
+  hits.push(...findSubmitPatterns(body));
 
   // The gate itself must exist exactly once.
   const defs = source.split(`window.${CONFIRM_FN_NAME}`).length - 1;

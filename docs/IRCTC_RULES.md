@@ -138,13 +138,15 @@ no-auto-book invariant is the legal load-bearing wall — keep it.
   irctc.co.in sends `X-Frame-Options`/`frame-ancestors`. Not load-bearing for
   the current design (see above), but confirm during device testing if the
   design ever changes to embedded frames.
-- **UNVERIFIED — WebView user-agent / fingerprint blocking:** could not find
-  a source stating IRCTC blocks WebView user agents specifically. However,
-  IRCTC's bot manager does **device fingerprinting and bot-signature
-  matching** (TOI, §3), so a default WebView UA (which differs from Chrome
-  mobile UA) is a plausible risk factor. Mitigation: set the WebView
-  user-agent to a standard mobile Chrome string and verify on a real device
-  at a real 10:00 window. Mark as **device-test item**.
+- **CONFIRMED 2026-09-26 (device field report) — WebView fingerprint blocking:**
+  IRCTC's Akamai bot protection serves HTTP 403 "Access Denied"
+  (ref 18.c60e0317.1790397001.2e4c6986) to the embedded WebView EVEN WITH a
+  stock mobile-Chrome UA string set. The WebView is fingerprinted beyond its
+  UA, so UA changes are not a fix and must not be used as evasion. Sanctioned
+  response: detect the denial (HTTP 403 / "Access Denied" title) and offer a
+  genuine Chrome tab (expo-web-browser Custom Tabs — real browser identity,
+  shared login) as the fallback. No automation may attempt to bypass the
+  block.
 - **UNVERIFIED — exact OTP screen position in the booking flow:** sources
   confirm the per-booking Aadhaar OTP is mandatory, but the precise screen
   order inside IRCTC's current SPA (before vs after payment selection) was
