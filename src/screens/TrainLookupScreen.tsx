@@ -1,10 +1,9 @@
 /**
- * TrainLookup — user-driven train search on IRCTC's own site.
+ * IrctcBrowser — user-driven browsing on IRCTC's own site inside the app.
  *
- * There is no reliable offline train-number directory (numbers change with
- * new trains), so instead of shipping a stale fake list, this screen opens
- * IRCTC's real train search in the app's WebView. The user searches
- * themselves, notes the 5-digit train number, goes back, and types it in.
+ * Used for two jobs: finding train numbers, and logging in to IRCTC ahead
+ * of the Tatkal window (cookies are shared app-wide on Android, so a login
+ * here carries into the booking WebView — every second counts at 10:00).
  *
  * Same safety as BookingScreen: HTTPS + irctc.co.in allowlist enforced,
  * stock mobile-Chrome UA. No fill script, no automation — pure browsing.
@@ -20,12 +19,26 @@ import { C } from '../theme';
 import { isAllowedUrl } from '../core/privacy';
 import type { Nav } from '../App';
 
-const IRCTC_SEARCH_URL = 'https://www.irctc.co.in/nget/';
+export const IRCTC_HOME_URL = 'https://www.irctc.co.in/nget/';
 
 const STOCK_CHROME_MOBILE_UA =
   'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
 
-export default function TrainLookupScreen({ nav }: { nav: Nav }) {
+interface Props {
+  nav: Nav;
+  title: string;
+  hint: string;
+  url?: string;
+  backLabel?: string;
+}
+
+export default function IrctcBrowserScreen({
+  nav,
+  title,
+  hint,
+  url = IRCTC_HOME_URL,
+  backLabel = '← Back',
+}: Props) {
   const [blockedUrl, setBlockedUrl] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -42,12 +55,8 @@ export default function TrainLookupScreen({ nav }: { nav: Nav }) {
   return (
     <View style={styles.root}>
       <View style={styles.header}>
-        <Text style={styles.title}>Find your train</Text>
-        <Text style={styles.sub}>
-          Search trains on IRCTC below, note the 5-digit train number, then go
-          back and enter it. (The official RailOne app works too — same IRCTC
-          backend, same Tatkal quota.)
-        </Text>
+        <Text style={styles.title}>{title}</Text>
+        <Text style={styles.sub}>{hint}</Text>
       </View>
 
       {blockedUrl && (
@@ -57,7 +66,7 @@ export default function TrainLookupScreen({ nav }: { nav: Nav }) {
 
       <WebView
         style={styles.web}
-        source={{ uri: IRCTC_SEARCH_URL }}
+        source={{ uri: url }}
         userAgent={STOCK_CHROME_MOBILE_UA}
         onShouldStartLoadWithRequest={onShouldStartLoadWithRequest}
         onError={onError}
@@ -66,7 +75,7 @@ export default function TrainLookupScreen({ nav }: { nav: Nav }) {
       />
 
       <TouchableOpacity style={styles.back} onPress={nav.back}>
-        <Text style={styles.backText}>← Back to trip setup</Text>
+        <Text style={styles.backText}>{backLabel}</Text>
       </TouchableOpacity>
     </View>
   );

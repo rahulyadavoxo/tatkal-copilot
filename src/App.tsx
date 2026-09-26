@@ -17,7 +17,7 @@ import PnrScreen from './screens/PnrScreen';
 import TripSetupScreen from './screens/TripSetupScreen';
 import CountdownScreen from './screens/CountdownScreen';
 import BookingScreen from './screens/BookingScreen';
-import TrainLookupScreen from './screens/TrainLookupScreen';
+import IrctcBrowserScreen from './screens/TrainLookupScreen';
 
 export type Route =
   | { name: 'home' }
@@ -26,7 +26,8 @@ export type Route =
   | { name: 'tripSetup' }
   | { name: 'countdown'; tripId: string }
   | { name: 'booking'; tripId: string }
-  | { name: 'trainLookup' };
+  | { name: 'trainLookup' }
+  | { name: 'irctcLogin' };
 
 export interface Nav {
   go: (r: Route) => void;
@@ -57,7 +58,22 @@ export default function App() {
           <CountdownScreen nav={nav} tripId={route.tripId} />
         )}
         {route.name === 'booking' && <BookingScreen nav={nav} tripId={route.tripId} />}
-        {route.name === 'trainLookup' && <TrainLookupScreen nav={nav} />}
+        {route.name === 'trainLookup' && (
+          <IrctcBrowserScreen
+            nav={nav}
+            title="Find your train"
+            hint="Search trains on IRCTC below, note the 5-digit train number, then go back and enter it. (The official RailOne app works too — same IRCTC backend, same Tatkal quota.)"
+            backLabel="← Back to trip setup"
+          />
+        )}
+        {route.name === 'irctcLogin' && (
+          <IrctcBrowserScreen
+            nav={nav}
+            title="Log in to IRCTC"
+            hint="Log in with your IRCTC user ID and password here, BEFORE the Tatkal window opens. Your login stays active in the app, so at 10:00/11:00 you go straight to booking — no login delay. Type your credentials only on IRCTC's own page."
+            backLabel="← Back to home"
+          />
+        )}
       </ErrorBoundary>
     </SafeAreaView>
   );

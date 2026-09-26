@@ -10,7 +10,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -33,6 +32,7 @@ import {
 import type { Nav } from '../App';
 import { useFocusLoad } from './hooks';
 import StationField from './StationField';
+import TrainField from './TrainField';
 import DatePickerField from './DatePickerField';
 
 export default function TripSetupScreen({ nav }: { nav: Nav }) {
@@ -120,31 +120,25 @@ export default function TripSetupScreen({ nav }: { nav: Nav }) {
   const capHit = selected.length >= MAX_PASSENGERS_PER_TATKAL_PNR;
 
   return (
-    <ScrollView style={styles.root} contentContainerStyle={styles.inner}>
+    <ScrollView
+      style={styles.root}
+      contentContainerStyle={styles.inner}
+      keyboardShouldPersistTaps="handled"
+    >
       <Text style={styles.title}>New trip</Text>
 
-      <Text style={styles.label}>Train number</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="e.g. 12430"
-        placeholderTextColor={C.muted}
-        keyboardType="numeric"
-        maxLength={5}
+      <TrainField
+        label="Train"
         value={trainNo}
-        onChangeText={(t) => setTrainNo(t.replace(/[^0-9]/g, ''))}
+        onSelect={setTrainNo}
+        placeholder="Type train name or number…"
       />
       <TouchableOpacity onPress={() => nav.go({ name: 'trainLookup' })}>
-        <Text style={styles.link}>🔍 Don’t know the train number? Find it on IRCTC →</Text>
+        <Text style={styles.link}>🔍 Train not in the list? Find it on IRCTC →</Text>
       </TouchableOpacity>
 
-      <View style={styles.row}>
-        <View style={styles.half}>
-          <StationField label="From" value={from} onSelect={setFrom} placeholder="Type station…" />
-        </View>
-        <View style={styles.half}>
-          <StationField label="To" value={to} onSelect={setTo} placeholder="Type station…" />
-        </View>
-      </View>
+      <StationField label="From" value={from} onSelect={setFrom} placeholder="Type station name or code…" />
+      <StationField label="To" value={to} onSelect={setTo} placeholder="Type station name or code…" />
 
       <DatePickerField label="Journey date" value={journeyDate} onSelect={setJourneyDate} />
 
@@ -219,12 +213,6 @@ const styles = StyleSheet.create({
   title: { color: C.lime, fontSize: 22, fontWeight: '800', marginBottom: 12 },
   label: { color: C.muted, fontSize: 13, marginTop: 10, marginBottom: 6 },
   groupLabel: { color: C.ink, fontSize: 12, fontWeight: '700', marginTop: 8, marginBottom: 6 },
-  input: {
-    backgroundColor: C.card, color: C.ink, borderColor: C.line, borderWidth: 1,
-    borderRadius: 8, padding: 11, fontSize: 15,
-  },
-  row: { flexDirection: 'row', gap: 10 },
-  half: { flex: 1 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: {
     borderColor: C.line, borderWidth: 1, borderRadius: 16,

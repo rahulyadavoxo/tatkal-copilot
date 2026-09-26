@@ -73,6 +73,12 @@ export default function HomeScreen({ nav }: { nav: Nav }) {
       </TouchableOpacity>
       <TouchableOpacity
         style={styles.secondary}
+        onPress={() => nav.go({ name: 'irctcLogin' })}
+      >
+        <Text style={styles.secondaryText}>🔑 Log in to IRCTC</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={styles.secondary}
         onPress={() => nav.go({ name: 'passengers' })}
       >
         <Text style={styles.secondaryText}>Passengers</Text>
