@@ -235,18 +235,66 @@ function isLoggedIn(){
   try { t = norm(document.body ? document.body.innerText : ''); } catch (e) {}
   return /my account|log\\s?out|my profile/.test(t);
 }
+function clickableAncestor(el){
+  var p = el, d = 0;
+  while (p && d < 4) {
+    var tag = (p.tagName || '').toLowerCase();
+    if (tag === 'button' || tag === 'a' || p.getAttribute('role') === 'button') return p;
+    p = p.parentElement; d++;
+  }
+  return el;
+}
+function inTopHeader(el){
+  try {
+    var r = el.getBoundingClientRect();
+    return r && r.top >= -20 && r.top < 170 && r.width > 0 && r.height > 0;
+  } catch (e) { return false; }
+}
 function findProfileControl(){
   var els = document.querySelectorAll('button, a, [role="button"]');
-  var i, el;
+  var i, el, al, ident;
+  // T1: accessible name says login / sign in.
   for (i = 0; i < els.length; i++) {
     el = els[i]; if (!visible(el)) continue;
-    var al = norm((el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('title') || ''));
-    if (/log\\s?in/.test(al)) return el;
+    al = norm((el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('title') || ''));
+    if (/log\\s?in|sign\\s?in/.test(al)) return el;
   }
+  // T2: visible text is exactly "login".
   for (i = 0; i < els.length; i++) {
     el = els[i]; if (!visible(el)) continue;
     if (/^\\s*log\\s?in\\s*$/i.test(el.innerText || '')) return el;
   }
+  // T3: class/id/name carries login/signin (e.g. .login-btn, #loginLink).
+  for (i = 0; i < els.length; i++) {
+    el = els[i]; if (!visible(el)) continue;
+    ident = norm((el.className || '').toString()) + ' ' +
+            norm(el.getAttribute('id') || '') + ' ' +
+            norm(el.getAttribute('name') || '');
+    if (/login|signin/.test(ident)) return el;
+  }
+  // T4: the live IRCTC mobile header shows an icon-only person glyph with no
+  // accessible name (user screenshot 2026-09-27). Look in the top header for
+  // a user/person/account/login icon; keep only the innermost matches so a
+  // wrapper's innerHTML can't shadow the real icon; click the nearest
+  // clickable parent of the first one.
+  var icons = document.querySelectorAll('header i, header img, header svg, header span, header div');
+  var matches = [], inner = [], j, isAncestor;
+  for (i = 0; i < icons.length; i++) {
+    el = icons[i]; if (!visible(el) || !inTopHeader(el)) continue;
+    var hay = norm((el.className || '').toString()) + ' ' +
+              norm(el.getAttribute('src') || '') + ' ' +
+              norm(el.getAttribute('alt') || '') + ' ' +
+              norm(el.innerHTML || '').slice(0, 200);
+    if (/user|person|account|login|fa-user|profile/.test(hay)) matches.push(el);
+  }
+  for (i = 0; i < matches.length; i++) {
+    isAncestor = false;
+    for (j = 0; j < matches.length; j++) {
+      if (i !== j && matches[i].contains(matches[j])) { isAncestor = true; break; }
+    }
+    if (!isAncestor) inner.push(matches[i]);
+  }
+  if (inner.length) return clickableAncestor(inner[0]);
   return null;
 }
 function captchaPresent(){

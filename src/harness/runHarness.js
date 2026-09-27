@@ -379,6 +379,34 @@ async function waitForEvent(page, type, timeoutMs) {
       await page.close();
     }
 
+    // ===== Phase E2: icon-only login trigger (live IRCTC mobile header) =====
+    // Mirrors the user's 2026-09-27 screenshot: the header person glyph has no
+    // accessible name, so the engine must find it via the icon fallback.
+    {
+      const page = await browser.newPage();
+      await page.goto('file://' + MOCK_PREBOOK + '?iconlogin=1');
+      await page.addScriptTag({ content: prebook.buildPrebookScript(PREBOOK_PLAN, { seed: SEED }) });
+      await waitForEvent(page, 'PREBOOK_DONE', 90000);
+      const log = await eventLog(page);
+      const missing = log.filter((e) => e.type === 'PREBOOK_STEP_MISSING');
+      if (missing.length !== 0) {
+        fail('PREBOOK_ICONLOGIN: missing steps: ' + missing.map((e) => e.data.step).join(', '));
+      }
+      const st = await page.evaluate(() => ({
+        account: document.getElementById('accountLabel').textContent,
+        accountShown: document.getElementById('accountLabel').style.display !== 'none',
+        modalHidden: document.getElementById('loginModal').style.display === 'none',
+        iconUsed: !!document.getElementById('profileIcon'),
+        submits: window.__formSubmits,
+      }));
+      if (!st.iconUsed) fail('PREBOOK_ICONLOGIN: icon variant did not render');
+      if (!st.accountShown || st.account !== 'My Account') fail('PREBOOK_ICONLOGIN: not logged in via icon trigger');
+      if (!st.modalHidden) fail('PREBOOK_ICONLOGIN: login modal still open');
+      if (st.submits !== 0) fail('PREBOOK_ICONLOGIN: a form was submitted');
+      console.log('PREBOOK_ICONLOGIN_OK');
+      await page.close();
+    }
+
     // ============ Phase F: CAPTCHA on login halts — never bypassed =========
     {
       const page = await browser.newPage();

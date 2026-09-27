@@ -7,6 +7,9 @@
     - optional CAPTCHA on the login modal when ?captcha=1 is present
     - search form: From/To autocomplete, DD/MM/YYYY date, Class + Quota selects
   Deliberately NO stable page-level ids on the language buttons or profile
+  button. ?iconlogin=1 swaps the accessible profile button for an icon-only
+  person glyph with no accessible name, mirroring the live IRCTC mobile
+  header (user screenshot 2026-09-27).
   icon — the engine must find them by text/aria-label like on the live page.
 -->
 <html lang="en">
@@ -121,6 +124,22 @@ document.querySelectorAll('#langAlert button').forEach(function(b){
 document.getElementById('profileBtn').addEventListener('click', function(){
   document.getElementById('loginModal').style.display = 'flex';
 });
+
+// iconlogin variant: icon-only person glyph, NO aria-label/title/text saying
+// login — like the live IRCTC mobile header (user screenshot 2026-09-27).
+if (qs.get('iconlogin') === '1') {
+  var pb = document.getElementById('profileBtn');
+  pb.style.display = 'none';
+  var pi = document.createElement('span');
+  pi.id = 'profileIcon';
+  pi.className = 'user-circle-icon';
+  pi.style.cssText = 'font-size:20px;cursor:pointer';
+  pi.textContent = '\uD83D\uDC64';
+  pi.addEventListener('click', function(){
+    document.getElementById('loginModal').style.display = 'flex';
+  });
+  pb.parentElement.appendChild(pi);
+}
 
 document.getElementById('signInBtn').addEventListener('click', function(){
   var u = document.getElementById('loginUser').value;
