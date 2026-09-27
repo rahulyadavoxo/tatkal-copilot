@@ -109,8 +109,22 @@
 window.__tatkalEventLog = [];
 window.__formSubmits = 0;
 document.addEventListener('submit', function(e){ window.__formSubmits++; e.preventDefault(); }, true);
-
 var qs = new URLSearchParams(location.search);
+
+// iconlogin variant also mimics the live page's non-semantic header wrapper
+// (Angular <app-header>-style): swap <header> for a plain div BEFORE any
+// element wiring below, so the engine cannot rely on a <header> tag.
+if (qs.get('iconlogin') === '1') {
+  (function(){
+    var hdr = document.querySelector('header');
+    if (!hdr) return;
+    var wrap = document.createElement('div');
+    wrap.className = 'app-header';
+    wrap.innerHTML = hdr.innerHTML;
+    hdr.parentElement.replaceChild(wrap, hdr);
+  })();
+}
+
 if (qs.get('captcha') === '1') {
   document.getElementById('captchaBlock').style.display = 'block';
 }

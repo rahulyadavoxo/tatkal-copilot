@@ -75,4 +75,37 @@ describe('prebook script safety', () => {
     const tampered = script + '\ndocument.forms[0].submit();\n';
     expect(scanPrebookForViolations(tampered)).toContain('form.submit() call');
   });
+
+  it('defines every function the script calls (no dropped helpers)', () => {
+    // Regression guard: a refactor once deleted captchaPresent() and the
+    // only signal was a harness timeout. Every bare call in the built
+    // script must resolve to a defined function or a known browser global.
+    // String literals are stripped first: CSS selectors like
+    // input:not([type]) would otherwise look like function calls.
+    // Strip string literals (CSS selectors like input:not([type]) would
+    // otherwise look like calls), then line comments (e.g. "strip (no"
+    // in prose would too). What remains is real code.
+    const code = script
+      .replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g, '')
+      .replace(/\/\/.*/g, '');
+    const defined = new Set(
+      [...code.matchAll(/function\s+([A-Za-z_$][\w$]*)\s*\(/g)].map((m) => m[1]),
+    );
+    const globals = new Set([
+      'Array', 'Object', 'JSON', 'Math', 'Date', 'RegExp', 'Error', 'Promise',
+      'String', 'Number', 'Boolean', 'parseInt', 'parseFloat', 'isNaN',
+      'encodeURIComponent', 'decodeURIComponent', 'setTimeout', 'clearTimeout',
+      'setInterval', 'clearInterval', 'requestAnimationFrame', 'document',
+      'window', 'navigator', 'location', 'KeyboardEvent', 'Event', 'CustomEvent',
+      'URLSearchParams', 'getComputedStyle', 'alert', 'confirm', 'scrollTo',
+    ]);
+    const keywords = new Set(['if', 'for', 'while', 'switch', 'catch', 'function', 'return']);
+    const missing: string[] = [];
+    for (const m of code.matchAll(/(?<![\w$.])\b([A-Za-z_$][\w$]*)\s*\(/g)) {
+      const name = m[1];
+      if (keywords.has(name) || defined.has(name) || globals.has(name)) continue;
+      if (!missing.includes(name)) missing.push(name);
+    }
+    expect(missing).toEqual([]);
+  });
 });

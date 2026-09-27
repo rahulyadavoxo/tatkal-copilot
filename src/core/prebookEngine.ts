@@ -250,52 +250,77 @@ function inTopHeader(el){
     return r && r.top >= -20 && r.top < 170 && r.width > 0 && r.height > 0;
   } catch (e) { return false; }
 }
-function findProfileControl(){
-  var els = document.querySelectorAll('button, a, [role="button"]');
-  var i, el, al, ident;
+// Ordered openLogin candidates, best first. The live IRCTC mobile header
+// (user screenshots 2026-09-27) shows an icon-only person glyph with no
+// accessible name, rendered inside an Angular component element rather than
+// a <header> tag — so the icon search scans the whole top strip, not just
+// <header>. A wrong tap is harmless: stepOpenLogin re-checks for the modal
+// after every candidate and falls back to "do it by hand".
+function loginCandidates(){
+  var out = [], seen = [], i, el, al, ident, j;
+  function push(c){ if (c && seen.indexOf(c) < 0) { seen.push(c); out.push(c); } }
+  var clickables = document.querySelectorAll('button, a, [role="button"]');
   // T1: accessible name says login / sign in.
-  for (i = 0; i < els.length; i++) {
-    el = els[i]; if (!visible(el)) continue;
+  for (i = 0; i < clickables.length; i++) {
+    el = clickables[i]; if (!visible(el)) continue;
     al = norm((el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('title') || ''));
-    if (/log\\s?in|sign\\s?in/.test(al)) return el;
+    if (/log\\s?in|sign\\s?in/.test(al)) push(el);
   }
   // T2: visible text is exactly "login".
-  for (i = 0; i < els.length; i++) {
-    el = els[i]; if (!visible(el)) continue;
-    if (/^\\s*log\\s?in\\s*$/i.test(el.innerText || '')) return el;
+  for (i = 0; i < clickables.length; i++) {
+    el = clickables[i]; if (!visible(el)) continue;
+    if (/^\\s*log\\s?in\\s*$/i.test(el.innerText || '')) push(el);
   }
-  // T3: class/id/name carries login/signin (e.g. .login-btn, #loginLink).
-  for (i = 0; i < els.length; i++) {
-    el = els[i]; if (!visible(el)) continue;
+  // T3: class/id/name carries login/signin.
+  for (i = 0; i < clickables.length; i++) {
+    el = clickables[i]; if (!visible(el)) continue;
     ident = norm((el.className || '').toString()) + ' ' +
             norm(el.getAttribute('id') || '') + ' ' +
             norm(el.getAttribute('name') || '');
-    if (/login|signin/.test(ident)) return el;
+    if (/login|signin/.test(ident)) push(el);
   }
-  // T4: the live IRCTC mobile header shows an icon-only person glyph with no
-  // accessible name (user screenshot 2026-09-27). Look in the top header for
-  // a user/person/account/login icon; keep only the innermost matches so a
-  // wrapper's innerHTML can't shadow the real icon; click the nearest
-  // clickable parent of the first one.
-  var icons = document.querySelectorAll('header i, header img, header svg, header span, header div');
-  var matches = [], inner = [], j, isAncestor;
-  for (i = 0; i < icons.length; i++) {
-    el = icons[i]; if (!visible(el) || !inTopHeader(el)) continue;
-    var hay = norm((el.className || '').toString()) + ' ' +
+  // T4: icon-only person/user glyph in the top strip (no <header> assumption).
+  var all = document.querySelectorAll('i, img, svg, span, div, a, button');
+  var hits = [];
+  for (i = 0; i < all.length; i++) {
+    el = all[i]; if (!visible(el) || !inTopHeader(el)) continue;
+    var own = norm((el.className || '').toString()) + ' ' +
               norm(el.getAttribute('src') || '') + ' ' +
               norm(el.getAttribute('alt') || '') + ' ' +
-              norm(el.innerHTML || '').slice(0, 200);
-    if (/user|person|account|login|fa-user|profile/.test(hay)) matches.push(el);
-  }
-  for (i = 0; i < matches.length; i++) {
-    isAncestor = false;
-    for (j = 0; j < matches.length; j++) {
-      if (i !== j && matches[i].contains(matches[j])) { isAncestor = true; break; }
+              norm(el.getAttribute('title') || '');
+    var inner = norm(el.innerHTML || '').slice(0, 200);
+    if (/user|person|account|fa-user/.test(own) || /login|signin|profile/.test(own) ||
+        /user|person|account|login|profile/.test(inner)) {
+      hits.push(el);
     }
-    if (!isAncestor) inner.push(matches[i]);
   }
-  if (inner.length) return clickableAncestor(inner[0]);
-  return null;
+  // keep only the innermost hits so a wrapper's markup can't shadow the icon
+  var innerHits = [], isAnc;
+  for (i = 0; i < hits.length; i++) {
+    isAnc = false;
+    for (j = 0; j < hits.length; j++) {
+      if (i !== j && hits[i].contains(hits[j])) { isAnc = true; break; }
+    }
+    if (!isAnc) innerHits.push(hits[i]);
+  }
+  for (i = 0; i < innerHits.length; i++) push(clickableAncestor(innerHits[i]));
+  // T5: positional fallback — clickables in the top-right corner of the
+  // viewport (the live page puts the person glyph top-right), rightmost first.
+  var corner = [];
+  for (i = 0; i < clickables.length; i++) {
+    el = clickables[i]; if (!visible(el) || !inTopHeader(el)) continue;
+    try {
+      var r = el.getBoundingClientRect();
+      var vw = window.innerWidth || 1000;
+      if (r.right > vw - 170) corner.push(el);
+    } catch (e) {}
+  }
+  corner.sort(function(a, b){
+    try { return b.getBoundingClientRect().right - a.getBoundingClientRect().right; }
+    catch (e) { return 0; }
+  });
+  for (i = 0; i < corner.length && i < 4; i++) push(corner[i]);
+  return out;
 }
 function captchaPresent(){
   var imgs = document.querySelectorAll('img');
@@ -314,12 +339,16 @@ function captchaPresent(){
 async function stepOpenLogin(){
   if (isLoggedIn()) return stepOk('openLogin', { skipped: true, reason: 'already-logged-in' });
   if (loginModal()) return stepOk('openLogin', { skipped: true, reason: 'already-open' });
-  var c = findProfileControl();
-  if (!c) return stepMissing('openLogin');
-  clickEl(c);
-  await sleep(1200);
-  if (!loginModal()) return stepMissing('openLogin');
-  return stepOk('openLogin');
+  var cands = loginCandidates();
+  for (var k = 0; k < cands.length && k < 6; k++) {
+    clickEl(cands[k]);
+    await sleep(1200);
+    if (loginModal()) return stepOk('openLogin', { candidate: k });
+    // dismiss anything the tap may have opened (e.g. a notifications panel)
+    try { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true })); } catch (e) {}
+    await sleep(300);
+  }
+  return stepMissing('openLogin');
 }
 function findLoginInputs(){
   var user = null, pass = null;
