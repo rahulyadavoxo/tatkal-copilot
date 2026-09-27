@@ -8,6 +8,8 @@
     - search form: From/To autocomplete, DD/MM/YYYY date, Class + Quota selects
   Deliberately NO stable page-level ids on the language buttons or profile
   button. ?iconlogin=1 swaps the accessible profile button for an icon-only
+  person glyph with no accessible name. ?realotp=1 shows a genuine OTP input
+  in the login modal.
   person glyph with no accessible name, mirroring the live IRCTC mobile
   header (user screenshot 2026-09-27).
   icon — the engine must find them by text/aria-label like on the live page.
@@ -63,6 +65,13 @@
     <h2 style="text-align:center">LOGIN</h2>
     <input id="loginUser" type="text" placeholder="User Name" aria-label="User Name">
     <input id="loginPass" type="password" placeholder="Password" aria-label="Password">
+    <div class="vi-hint">
+      <input type="checkbox" id="viCheck">
+      <label for="viCheck">Visually impaired users may select this option to receive OTP instead of password</label>
+    </div>
+    <div id="realOtpBlock" style="display:none">
+      <input id="otpInput" type="text" placeholder="Enter OTP" aria-label="Enter OTP">
+    </div>
     <div id="captchaBlock" style="display:none">
       <img id="captchaImg" alt="captcha image" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">
       <input id="captchaInput" type="text" placeholder="Enter Captcha" aria-label="Enter Captcha">
@@ -127,6 +136,9 @@ if (qs.get('iconlogin') === '1') {
 
 if (qs.get('captcha') === '1') {
   document.getElementById('captchaBlock').style.display = 'block';
+}
+if (qs.get('realotp') === '1') {
+  document.getElementById('realOtpBlock').style.display = 'block';
 }
 
 document.querySelectorAll('#langAlert button').forEach(function(b){

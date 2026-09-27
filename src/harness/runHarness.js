@@ -426,6 +426,30 @@ async function waitForEvent(page, type, timeoutMs) {
       console.log('PREBOOK_CAPTCHA_OK');
       await page.close();
     }
+
+    // ===== Phase F2: a genuine OTP field halts — help text alone must not ===
+    // The default modal carries the live page's "receive OTP instead of"
+    // hint for visually impaired users; the engine must NOT treat that
+    // prose as an OTP challenge (user report 2026-09-27). ?realotp=1 adds a
+    // real OTP input, which must halt with OTP_REQUIRED.
+    {
+      const page = await browser.newPage();
+      await page.goto('file://' + MOCK_PREBOOK + '?realotp=1');
+      await page.addScriptTag({ content: prebook.buildPrebookScript(PREBOOK_PLAN, { seed: SEED }) });
+      await waitForEvent(page, 'OTP_REQUIRED', 90000);
+      const log = await eventLog(page);
+      if (log.some((e) => e.type === 'PREBOOK_DONE')) {
+        fail('PREBOOK_OTP: flow completed despite a real OTP field');
+      }
+      const st = await page.evaluate(() => ({
+        userFilled: document.getElementById('loginUser').value !== '',
+        modalOpen: document.getElementById('loginModal').style.display !== 'none',
+      }));
+      if (st.userFilled) fail('PREBOOK_OTP: credentials were typed despite the OTP halt');
+      if (!st.modalOpen) fail('PREBOOK_OTP: login modal closed despite the OTP halt');
+      console.log('PREBOOK_OTP_OK');
+      await page.close();
+    }
     // ============ Phase G: post-search flow — search → train → popup Yes ====
     {
       const plan = {

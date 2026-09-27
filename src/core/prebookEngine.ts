@@ -171,12 +171,28 @@ function controlLabelText(el){
   }
   return parts.join(' ');
 }
+function directLabelText(el){
+  var parts = [];
+  try {
+    if (el.labels) for (var i = 0; i < el.labels.length; i++) parts.push(el.labels[i].innerText || '');
+  } catch (e) {}
+  return parts.join(' ');
+}
 function otpInputVisible(){
+  // True only when a real OTP *field* is on screen. The live IRCTC login
+  // modal carries static help text ("...receive OTP instead of...") for
+  // visually impaired users — that prose, and the opt-in checkbox itself,
+  // must NOT count as an OTP challenge (user report 2026-09-27: OTP login
+  // exists only for the visually-impaired path).
   var inputs = document.querySelectorAll('input');
   for (var k = 0; k < inputs.length; k++) {
-    if (!visible(inputs[k])) continue;
-    var hay = norm(attrHaystack(inputs[k]) + ' ' + controlLabelText(inputs[k]));
-    if (/otp/.test(hay)) return true;
+    var el = inputs[k];
+    if (!visible(el)) continue;
+    var type = (el.getAttribute('type') || '').toLowerCase();
+    if (type === 'checkbox' || type === 'radio' || type === 'hidden' ||
+        type === 'submit' || type === 'button' || type === 'image') continue;
+    var hay = norm(attrHaystack(el) + ' ' + directLabelText(el));
+    if (/otp|one[\\s-]?time/.test(hay)) return true;
   }
   return false;
 }
@@ -356,7 +372,7 @@ function findLoginInputs(){
   for (var i = 0; i < inputs.length; i++) {
     var el = inputs[i];
     if (!visible(el)) continue;
-    var hay = norm(attrHaystack(el));
+    var hay = norm(attrHaystack(el) + ' ' + directLabelText(el));
     var type = (el.getAttribute('type') || '').toLowerCase();
     if (!user && /user\\s?name|login\\s?id/.test(hay) && type !== 'password') user = el;
     if (!pass && (type === 'password' || /password/.test(hay))) pass = el;
