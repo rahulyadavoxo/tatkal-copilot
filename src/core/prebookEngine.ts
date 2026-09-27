@@ -507,39 +507,57 @@ function dismissCalendar(){
     document.dispatchEvent(ev);
   } catch (e) {}
 }
+function calDayText(el){
+  return norm(el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim();
+}
+function calDisabled(el){
+  if (!el) return false;
+  var cls = ' ' + (el.className || '') + ' ';
+  if (cls.indexOf('p-disabled') >= 0) return true;
+  try { if (el.getAttribute('aria-disabled') === 'true') return true; } catch (e) {}
+  return false;
+}
+// Returns true on success, otherwise a short reason code for diagnostics.
 async function pickDateFromCalendar(input, target){
   clickEl(input);
   var dp = null;
   for (var w = 0; w < 20 && !dp; w++) { await sleep(250); dp = datepickerOverlay(); }
-  if (!dp) return false;
+  if (!dp) return 'no-overlay';
   for (var n = 0; n < 30; n++) {
     var shown = overlayMonthYear(dp);
-    if (!shown) return false;
+    if (!shown) return 'no-title';
     if (shown.m === target.m && shown.y === target.y) break;
     var goPrev = (shown.y > target.y) || (shown.y === target.y && shown.m > target.m);
     var btn = dp.querySelector(goPrev ? '.p-datepicker-prev' : '.p-datepicker-next');
-    if (!btn || !visible(btn)) return false;
+    if (!btn || !visible(btn)) return 'no-nav';
     clickEl(btn);
     await sleep(450);
     dp = datepickerOverlay() || dp;
   }
   var fin = overlayMonthYear(dp);
-  if (!fin || fin.m !== target.m || fin.y !== target.y) return false;
+  if (!fin || fin.m !== target.m || fin.y !== target.y) return 'no-nav';
+  // Live PrimeNG cells carry whitespace around the day number and put the
+  // disabled state on the inner span — match tolerantly (2026-09-27 fix).
   var cells = dp.querySelectorAll('.p-datepicker-calendar td');
-  var hit = null;
+  var hit = null, hitTd = null;
   for (var c = 0; c < cells.length; c++) {
     var td = cells[c];
-    var cls = ' ' + (td.className || '') + ' ';
-    if (cls.indexOf('p-disabled') >= 0 || cls.indexOf('other-month') >= 0) continue;
+    var tcls = ' ' + (td.className || '') + ' ';
+    if (tcls.indexOf('other-month') >= 0) continue;
     var inner = td.querySelector('span, a') || td;
-    if (norm(inner.innerText || inner.textContent || '') === String(target.d)) { hit = inner; break; }
+    if (calDisabled(td) || calDisabled(inner)) continue;
+    if (calDayText(inner) === String(target.d)) { hit = inner; hitTd = td; break; }
   }
-  if (!hit) return false;
+  if (!hit) return 'no-day';
   clickEl(hit);
   await sleep(600);
+  if (!dateInputValueMatches(input, PLAN.dateDMY) && hitTd && hitTd !== hit) {
+    clickEl(hitTd); // some builds listen on the cell itself
+    await sleep(600);
+  }
   dismissCalendar();
   await sleep(300);
-  return dateInputValueMatches(input, PLAN.dateDMY);
+  return dateInputValueMatches(input, PLAN.dateDMY) ? true : 'no-verify';
 }
 async function stepDate(){
   var input = findDateInput();
@@ -554,8 +572,9 @@ async function stepDate(){
     await sleep(400);
   }
   if (!dateInputValueMatches(input, PLAN.dateDMY)) {
-    var ok = await pickDateFromCalendar(input, target);
-    if (!ok || !dateInputValueMatches(input, PLAN.dateDMY)) return stepMissing('date');
+    var picked = await pickDateFromCalendar(input, target);
+    if (picked !== true || !dateInputValueMatches(input, PLAN.dateDMY))
+      return stepMissing('date', typeof picked === 'string' ? picked : 'no-verify');
   }
   if (datepickerOverlay()) { dismissCalendar(); await sleep(300); }
   return stepOk('date');

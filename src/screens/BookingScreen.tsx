@@ -221,7 +221,9 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
         prebookActive.current = false;
         setPrebookState('idle');
         setPrebookNotice(
-          `The app couldn\u2019t find “${data.step ?? 'a step'}” on IRCTC\u2019s page — it may have changed. Do that step by hand, then tap “🚀 Start booking” again to continue.`,
+          data.step === 'date'
+            ? 'The app couldn\u2019t tap your travel date in IRCTC\u2019s calendar — pick the date by hand, then tap “🚀 Start booking” again to continue.'
+            : `The app couldn\u2019t find “${data.step ?? 'a step'}” on IRCTC\u2019s page — it may have changed. Do that step by hand, then tap “🚀 Start booking” again to continue.`,
         );
         break;
     }

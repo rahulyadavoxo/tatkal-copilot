@@ -165,9 +165,10 @@ if (qs.get('realotp') === '1') {
     for (var d = 1; d <= dim; d++) {
       var td = document.createElement('td');
       var sp = document.createElement('span');
-      sp.textContent = d;
-      // days before mock "today" (27/09/2026) are disabled
-      if (viewY === 2026 && viewM === 9 && d < 27) td.className = 'p-disabled';
+      sp.textContent = '\n  ' + d + ' \n'; // live PrimeNG pads day text
+      // days before mock "today" (27/09/2026) are disabled — live PrimeNG
+      // puts p-disabled on the inner span, not the cell
+      if (viewY === 2026 && viewM === 9 && d < 27) sp.className = 'p-disabled';
       (function(day){
         sp.addEventListener('click', function(){
           if (td.className.indexOf('p-disabled') >= 0) return;
