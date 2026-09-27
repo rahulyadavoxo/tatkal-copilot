@@ -11,7 +11,7 @@
     "extra": {
       "_privacyNote": "Deliberately NO RECEIVE_SMS / READ_SMS permission. OTP is read via the Android SMS User Consent API (system one-tap dialog, no broad SMS permission) — see docs/IRCTC_RULES.md §5. The WebView may only load irctc.co.in (see src/core/privacy.ts, gate G9).",
       "eas": {
-        "projectId": "944389e6-0255-4bae-a419-acbe0d3dc487"
+        "projectId": "78f995bf-f09a-40b6-b749-73c8e5805a6c"
       }
     },
     "icon": "./assets/icon.png",
@@ -31,6 +31,6 @@
     },
     "userInterfaceStyle": "light",
     "version": "0.1.0",
-    "owner": "elishb534s-team"
+    "owner": "elishb534-2s-team"
   }
 }
