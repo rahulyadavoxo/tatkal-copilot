@@ -63,7 +63,20 @@ import {
   type FillEvent,
   type FillPlan,
 } from '../core/fillEngine';
-import { loadPassengers, loadTrips, type Trip } from '../vaultStore';
+import {
+  buildPrebookScript,
+  toDMY,
+  type PrebookEvent,
+  type PrebookPlan,
+} from '../core/prebookEngine';
+import {
+  loadIrctcCredentials,
+  loadPassengers,
+  loadPrefs,
+  loadTrips,
+  type Trip,
+} from '../vaultStore';
+import { STATIONS } from '../data/stations';
 import type { Nav } from '../App';
 
 const IRCTC_URL = 'https://www.irctc.co.in';
@@ -91,7 +104,7 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
   const webRef = useRef<WebViewInstance | null>(null);
   const [trip, setTrip] = useState<Trip | null>(null);
   const [fillState, setFillState] = useState<FillState>('idle');
-  const [events, setEvents] = useState<FillEvent[]>([]);
+  const [events, setEvents] = useState<Array<FillEvent | PrebookEvent>>([]);
   const [otpRequired, setOtpRequired] = useState(false);
   const [otpDigits, setOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
   const [blockedUrl, setBlockedUrl] = useState<string | null>(null);
@@ -106,6 +119,10 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
   // Guidance shown when "Fill my form" is tapped but the passenger page
   // isn't open yet (probe said no-form) — previously a silent no-op.
   const [formNotice, setFormNotice] = useState<string | null>(null);
+  // Pre-booking flow state (steps 1–4: language → login → search form).
+  const [prebookState, setPrebookState] = useState<'idle' | 'running' | 'done'>('idle');
+  const [prebookNotice, setPrebookNotice] = useState<string | null>(null);
+  const prebookActive = useRef(false);
   const otpRefs = useRef<Array<TextInput | null>>([]);
   const probeResolver = useRef<((ready: boolean, reason: string) => void) | null>(null);
 
@@ -120,10 +137,65 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
     if (e.type === 'FILL_COMPLETE') setFillState('done');
   }, []);
 
+  // Pre-booking event routing. The engine never taps Search Trains /
+  // Continue / Book — it stops at PREBOOK_DONE and the user takes over.
+  const handlePrebookEvent = useCallback((type: string, data: { step?: string }) => {
+    switch (type) {
+      case 'PREBOOK_STARTED':
+        setPrebookState('running');
+        break;
+      case 'PREBOOK_STEP':
+        setEvents((prev) => [
+          ...prev.slice(-29),
+          { type: 'PREBOOK_STEP', t: Date.now(), data } as PrebookEvent,
+        ]);
+        break;
+      case 'PREBOOK_DONE':
+        prebookActive.current = false;
+        setPrebookState('done');
+        setPrebookNotice(
+          'Search details are filled — review them on IRCTC\u2019s page, then tap Search Trains there yourself.',
+        );
+        break;
+      case 'CAPTCHA_REQUIRED':
+        prebookActive.current = false;
+        setPrebookState('idle');
+        setPrebookNotice(
+          'IRCTC is showing a CAPTCHA on the login — solve it and tap SIGN IN yourself, then tap “🚀 Start booking” again to continue with the search form.',
+        );
+        break;
+      case 'LOGIN_FAILED':
+        prebookActive.current = false;
+        setPrebookState('idle');
+        setPrebookNotice(
+          'IRCTC didn\u2019t accept that login — check your saved login (Home → “👤 IRCTC account”) and try again.',
+        );
+        break;
+      case 'OTP_REQUIRED':
+        prebookActive.current = false;
+        setPrebookState('idle');
+        setPrebookNotice(
+          'IRCTC wants an OTP for this login — type it on their page yourself, then tap “🚀 Start booking” again.',
+        );
+        break;
+      case 'PREBOOK_STEP_MISSING':
+        prebookActive.current = false;
+        setPrebookState('idle');
+        setPrebookNotice(
+          `The app couldn\u2019t find “${data.step ?? 'a step'}” on IRCTC\u2019s page — it may have changed. Do that step by hand, then tap “🚀 Start booking” again to continue.`,
+        );
+        break;
+    }
+  }, []);
+
   const onMessage = useCallback(
     (ev: WebViewMessageEvent) => {
       try {
-        const e = JSON.parse(ev.nativeEvent.data) as FillEvent;
+        const e = JSON.parse(ev.nativeEvent.data) as {
+          type: string;
+          t?: number;
+          data?: Record<string, unknown>;
+        };
         if (e && typeof e.type === 'string') {
           if (e.type === 'FORM_PROBE_RESULT') {
             const r = probeResolver.current;
@@ -134,13 +206,26 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
             }
             return;
           }
-          pushEvent(e);
+          // Pre-booking flow events (language → login → search form).
+          if (
+            e.type === 'PREBOOK_STARTED' ||
+            e.type === 'PREBOOK_STEP' ||
+            e.type === 'PREBOOK_STEP_MISSING' ||
+            e.type === 'CAPTCHA_REQUIRED' ||
+            e.type === 'LOGIN_FAILED' ||
+            e.type === 'PREBOOK_DONE' ||
+            (e.type === 'OTP_REQUIRED' && prebookActive.current)
+          ) {
+            handlePrebookEvent(e.type, (e.data ?? {}) as { step?: string });
+            return;
+          }
+          pushEvent(e as FillEvent);
         }
       } catch {
         /* non-engine messages ignored */
       }
     },
-    [pushEvent],
+    [pushEvent, handlePrebookEvent],
   );
 
   // Denial detection: Akamai serves its "Access Denied" page with HTTP 403
@@ -244,6 +329,38 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
     webRef.current?.injectJavaScript(buildFillScript(plan));
   }, [fillState, buildPlan]);
 
+  // Pre-booking flow: explicit user tap ONLY. Builds the plan from the trip
+  // + the saved (encrypted) IRCTC login + language preference, then injects
+  // the pre-booking script. Each step is idempotent, so tapping again after
+  // a manual CAPTCHA/OTP resumes where the engine stopped.
+  const onPrebookTap = useCallback(async () => {
+    if (prebookState === 'running') return;
+    setPrebookNotice(null);
+    if (!trip) return;
+    const creds = await loadIrctcCredentials();
+    if (!creds) {
+      setPrebookNotice(
+        'Save your IRCTC login first: Home → “👤 IRCTC account”.',
+      );
+      return;
+    }
+    const prefs = await loadPrefs();
+    const stationName = (code: string) =>
+      STATIONS.find((s) => s.code === code)?.name ?? code;
+    const plan: PrebookPlan = {
+      language: prefs.language,
+      username: creds.username,
+      password: creds.password,
+      from: { code: trip.from, name: stationName(trip.from) },
+      to: { code: trip.to, name: stationName(trip.to) },
+      dateDMY: toDMY(trip.journeyDate),
+      classCode: trip.classCode,
+      quota: trip.quota ?? 'TATKAL',
+    };
+    prebookActive.current = true;
+    webRef.current?.injectJavaScript(buildPrebookScript(plan));
+  }, [prebookState, trip]);
+
   // Hardware back: first step back inside the IRCTC page, otherwise let the
   // app-level handler pop the screen (App.tsx). Never exits from here.
   useEffect(() => {
@@ -346,16 +463,35 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
 
       <ScrollView style={styles.panel} contentContainerStyle={styles.panelInner}>
         <Text style={styles.hint}>
-          1. Pick your class on IRCTC's train list, then tap "Fill my form"
-          on the passenger page — details fill at human pace, then stop.
-          {'\n'}2. "Consider for auto upgradation" is ticked for you —
-          leave it checked.
-          {'\n'}3. Type the Aadhaar OTP yourself, review every filled field,
-          then tap IRCTC's own Continue button on their page.
+          1. Tap "🚀 Start booking" — the app picks your language, opens the
+          login, fills your saved IRCTC login, and fills From / To / Date /
+          Class / Quota on the search page. If IRCTC shows a CAPTCHA, you
+          solve it by hand.
+          {'\n'}2. Review the search details, then tap Search Trains on
+          IRCTC's page yourself and pick your train.
+          {'\n'}3. On the passenger page, tap "⚡ Fill my form" — details
+          fill at human pace, then stop. Type the Aadhaar OTP yourself,
+          review every field, then tap IRCTC's own Continue button.
           {'\n'}4. At payment, choose UPI → your UPI app (e.g. PhonePe):
           the payment opens in YOUR app and you pay there — the copilot
           hands the payment to you at that screen.
         </Text>
+
+        <TouchableOpacity
+          style={[styles.fill, prebookState === 'running' && styles.disabled]}
+          disabled={prebookState === 'running'}
+          onPress={onPrebookTap}
+        >
+          <Text style={styles.fillText}>
+            {prebookState === 'running'
+              ? 'Booking… watch the page'
+              : prebookState === 'done'
+                ? '✓ Search filled — review it above'
+                : '🚀 Start booking'}
+          </Text>
+        </TouchableOpacity>
+
+        {prebookNotice && <Text style={styles.warn}>{prebookNotice}</Text>}
 
         <TouchableOpacity
           style={[styles.fill, fillState !== 'idle' && styles.disabled]}

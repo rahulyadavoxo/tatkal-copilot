@@ -19,6 +19,8 @@ const VAULT_KEY_ITEM = 'tatkal-vault-key';
 const PASSENGERS_ITEM = 'tatkal-passengers-v1';
 const TRIPS_ITEM = 'tatkal-trips-v1';
 const PNRS_ITEM = 'tatkal-pnrs-v1';
+const CREDENTIALS_ITEM = 'tatkal-irctc-creds-v1';
+const PREFS_ITEM = 'tatkal-prefs-v1';
 
 export type Gender = 'M' | 'F' | 'O';
 
@@ -37,6 +39,7 @@ export interface Trip {
   to: string; // station code, e.g. 'LKO'
   journeyDate: string; // YYYY-MM-DD
   classCode: string; // '3A' | '2A' | 'SL' | ...
+  quota: string; // IRCTC quota, e.g. 'TATKAL' (see IRCTC_QUOTAS)
   isAC: boolean;
   passengerIds: string[]; // refs into the passenger vault, max 4 (Tatkal PNR cap)
   contactMobile: string; // contact-details mobile, filled into IRCTC's form
@@ -162,4 +165,55 @@ export async function savePnrs(list: TrackedPnr[]): Promise<void> {
 
 export function newId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`;
+}
+
+// ---------------------------------------------------------------------------
+// IRCTC credentials — encrypted with the same AES-256-GCM vault.
+// The user types these into the app's own IRCTC-account screen; they are
+// filled into IRCTC's official login page only, never logged, never sent
+// anywhere else, and the assistant never sees them.
+// ---------------------------------------------------------------------------
+export interface IrctcCredentials {
+  username: string;
+  password: string;
+}
+
+export async function saveIrctcCredentials(creds: IrctcCredentials): Promise<void> {
+  const envelope = await vault().encryptJSON(creds);
+  await SecureStore.setItemAsync(CREDENTIALS_ITEM, envelope);
+}
+
+export async function loadIrctcCredentials(): Promise<IrctcCredentials | null> {
+  const envelope = await SecureStore.getItemAsync(CREDENTIALS_ITEM);
+  if (!envelope) return null;
+  return vault().decryptJSON<IrctcCredentials>(envelope);
+}
+
+export async function clearIrctcCredentials(): Promise<void> {
+  await SecureStore.deleteItemAsync(CREDENTIALS_ITEM);
+}
+
+// ---------------------------------------------------------------------------
+// Preferences — small settings (language choice), also encrypted.
+// ---------------------------------------------------------------------------
+export type AppLanguage = 'en' | 'hi';
+
+export interface Prefs {
+  language: AppLanguage; // IRCTC site language the app auto-selects
+}
+
+export async function loadPrefs(): Promise<Prefs> {
+  const envelope = await SecureStore.getItemAsync(PREFS_ITEM);
+  if (!envelope) return { language: 'en' };
+  try {
+    const p = await vault().decryptJSON<Prefs>(envelope);
+    return p && (p.language === 'hi' || p.language === 'en') ? p : { language: 'en' };
+  } catch {
+    return { language: 'en' };
+  }
+}
+
+export async function savePrefs(prefs: Prefs): Promise<void> {
+  const envelope = await vault().encryptJSON(prefs);
+  await SecureStore.setItemAsync(PREFS_ITEM, envelope);
 }

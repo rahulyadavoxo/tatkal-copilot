@@ -24,6 +24,7 @@ const { execFileSync } = require('child_process');
 const REPO = path.resolve(__dirname, '..', '..');
 const MOCK = path.join(REPO, 'src', 'harness', 'mockIrctc.html');
 const MOCK_REAL = path.join(REPO, 'src', 'harness', 'mockIrctcReal.html');
+const MOCK_PREBOOK = path.join(REPO, 'src', 'harness', 'mockIrctcPrebook.html');
 
 function fail(msg) {
   console.error('HARNESS_FAIL: ' + msg);
@@ -38,6 +39,7 @@ const LOCAL_TSC = path.join(REPO, 'node_modules', 'typescript', 'bin', 'tsc');
 const TSC_CMD = fs.existsSync(LOCAL_TSC) ? process.execPath : 'npx';
 const TSC_ARGS = (fs.existsSync(LOCAL_TSC) ? [LOCAL_TSC] : ['tsc']).concat([
   'src/core/fillEngine.ts',
+  'src/core/prebookEngine.ts',
   'src/core/tatkalConfig.ts',
   '--outDir', DIST,
   '--rootDir', 'src/core',
@@ -45,14 +47,15 @@ const TSC_ARGS = (fs.existsSync(LOCAL_TSC) ? [LOCAL_TSC] : ['tsc']).concat([
   '--target', 'es2020',
   '--esModuleInterop',
   '--skipLibCheck',
-  '--types', 'node', // only what fillEngine needs; avoids broken stray @types dirs
+  '--types', 'node', // only what the engines need; avoids broken stray @types dirs
 ]);
 try {
   execFileSync(TSC_CMD, TSC_ARGS, { cwd: REPO, stdio: 'pipe' });
 } catch (e) {
-  fail('tsc compile of fillEngine failed: ' + (e.stdout || e.stderr || e.message));
+  fail('tsc compile of engines failed: ' + (e.stdout || e.stderr || e.message));
 }
 const engine = require(path.join(DIST, 'fillEngine.js'));
+const prebook = require(path.join(DIST, 'prebookEngine.js'));
 
 // --- 2. Playwright ----------------------------------------------------------
 let playwright;
@@ -80,6 +83,18 @@ const PLAN = {
   ],
 };
 const SEED = 20260926;
+
+// Pre-booking plan: deliberately ordinary values — never real credentials.
+const PREBOOK_PLAN = {
+  language: 'en',
+  username: 'harnessuser',
+  password: 'harness-pass-1',
+  from: { code: 'BCT', name: 'Mumbai Central' },
+  to: { code: 'NDLS', name: 'New Delhi' },
+  dateDMY: '15/10/2026',
+  classCode: '3A',
+  quota: 'TATKAL',
+};
 
 async function eventLog(page) {
   return page.evaluate('window.__tatkalEventLog || []');
@@ -297,6 +312,70 @@ async function waitForEvent(page, type, timeoutMs) {
       if (alts.length < 1) fail('G7: parseAlternates returned zero alternates');
       if (dt > 5000) fail(`G7: parsing took ${dt}ms (> 5000ms)`);
       console.log(`FALLBACK_OK (${alts.length} alternates, ${dt}ms)`);
+      await page.close();
+    }
+
+    // ============ Phase E: pre-booking flow — language → login → search form
+    {
+      const script = prebook.buildPrebookScript(PREBOOK_PLAN, { seed: SEED });
+      const violations = prebook.scanPrebookForViolations(script);
+      if (violations.length !== 0) {
+        fail('PREBOOK: script violations: ' + violations.join('; '));
+      }
+      const page = await browser.newPage();
+      await page.goto('file://' + MOCK_PREBOOK);
+      await page.addScriptTag({ content: script });
+      await waitForEvent(page, 'PREBOOK_DONE', 90000);
+      const log = await eventLog(page);
+      const missing = log.filter((e) => e.type === 'PREBOOK_STEP_MISSING');
+      if (missing.length !== 0) {
+        fail('PREBOOK: missing steps: ' + missing.map((e) => e.data.step).join(', '));
+      }
+      if (log.some((e) => e.type === 'CAPTCHA_REQUIRED' || e.type === 'OTP_REQUIRED')) {
+        fail('PREBOOK: unexpected captcha/otp halt on the no-captcha page');
+      }
+      const st = await page.evaluate(() => ({
+        langHidden: document.getElementById('langAlert').style.display === 'none',
+        account: document.getElementById('accountLabel').textContent,
+        accountShown: document.getElementById('accountLabel').style.display !== 'none',
+        modalHidden: document.getElementById('loginModal').style.display === 'none',
+        from: document.getElementById('fromInput').value,
+        to: document.getElementById('toInput').value,
+        date: document.getElementById('dateInput').value,
+        cls: document.getElementById('classSelect').selectedOptions[0].text,
+        quota: document.getElementById('quotaSelect').selectedOptions[0].text,
+        submits: window.__formSubmits,
+      }));
+      if (!st.langHidden) fail('PREBOOK: language alert was not dismissed');
+      if (!st.accountShown || st.account !== 'My Account') fail('PREBOOK: not logged in after SIGN IN');
+      if (!st.modalHidden) fail('PREBOOK: login modal still open after SIGN IN');
+      if (!/\bBCT\b/.test(st.from)) fail('PREBOOK: From not set to BCT (got "' + st.from + '")');
+      if (!/\bNDLS\b/.test(st.to)) fail('PREBOOK: To not set to NDLS (got "' + st.to + '")');
+      if (st.date !== '15/10/2026') fail('PREBOOK: date wrong (got "' + st.date + '")');
+      if (st.cls !== '3A') fail('PREBOOK: class wrong (got "' + st.cls + '")');
+      if (st.quota !== 'TATKAL') fail('PREBOOK: quota wrong (got "' + st.quota + '")');
+      if (st.submits !== 0) fail('PREBOOK: a form was submitted');
+      console.log('PREBOOK_OK');
+      await page.close();
+    }
+
+    // ============ Phase F: CAPTCHA on login halts — never bypassed =========
+    {
+      const page = await browser.newPage();
+      await page.goto('file://' + MOCK_PREBOOK + '?captcha=1');
+      await page.addScriptTag({ content: prebook.buildPrebookScript(PREBOOK_PLAN, { seed: SEED }) });
+      await waitForEvent(page, 'CAPTCHA_REQUIRED', 90000);
+      const log = await eventLog(page);
+      if (log.some((e) => e.type === 'PREBOOK_DONE')) {
+        fail('PREBOOK_CAPTCHA: flow completed despite the CAPTCHA');
+      }
+      const st = await page.evaluate(() => ({
+        loggedIn: document.getElementById('accountLabel').style.display !== 'none',
+        modalOpen: document.getElementById('loginModal').style.display !== 'none',
+      }));
+      if (st.loggedIn) fail('PREBOOK_CAPTCHA: logged in despite the CAPTCHA');
+      if (!st.modalOpen) fail('PREBOOK_CAPTCHA: login modal closed despite the CAPTCHA');
+      console.log('PREBOOK_CAPTCHA_OK');
       await page.close();
     }
   } finally {

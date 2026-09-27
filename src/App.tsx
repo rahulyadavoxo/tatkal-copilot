@@ -19,6 +19,7 @@ import TripSetupScreen from './screens/TripSetupScreen';
 import CountdownScreen from './screens/CountdownScreen';
 import BookingScreen from './screens/BookingScreen';
 import IrctcBrowserScreen from './screens/TrainLookupScreen';
+import IrctcAccountScreen from './screens/IrctcAccountScreen';
 
 export type Route =
   | { name: 'home' }
@@ -28,7 +29,8 @@ export type Route =
   | { name: 'countdown'; tripId: string }
   | { name: 'booking'; tripId: string }
   | { name: 'trainLookup' }
-  | { name: 'irctcLogin' };
+  | { name: 'irctcLogin' }
+  | { name: 'irctcAccount' };
 
 export interface Nav {
   go: (r: Route) => void;
@@ -90,6 +92,9 @@ export default function App() {
             hint="Search trains on IRCTC below, note the 5-digit train number, then go back and enter it. (The official RailOne app works too — same IRCTC backend, same Tatkal quota.)"
             backLabel="← Back to trip setup"
           />
+        )}
+        {route.name === 'irctcAccount' && (
+          <IrctcAccountScreen nav={nav} />
         )}
         {route.name === 'irctcLogin' && (
           <IrctcBrowserScreen

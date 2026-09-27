@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<!--
+  mockIrctcPrebook.html — realistic IRCTC home/search page for the pre-booking
+  engine harness. Mirrors the user's 2026-09-27 screenshots:
+    - welcome alert with हिंदी / English language buttons
+    - header profile icon opening a LOGIN modal (User Name / Password / SIGN IN)
+    - optional CAPTCHA on the login modal when ?captcha=1 is present
+    - search form: From/To autocomplete, DD/MM/YYYY date, Class + Quota selects
+  Deliberately NO stable page-level ids on the language buttons or profile
+  icon — the engine must find them by text/aria-label like on the live page.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IRCTC — mock prebook</title>
+<style>
+  body { font-family: sans-serif; margin: 0; }
+  header { background: #213d77; color: #fff; padding: 10px 14px; display: flex; justify-content: space-between; align-items: center; }
+  #langAlert { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: flex; align-items: center; justify-content: center; z-index: 50; }
+  #langAlert .card { background: #fff; padding: 28px; border-radius: 8px; text-align: center; max-width: 420px; }
+  #langAlert .card button { background: #f58426; color: #fff; border: 0; border-radius: 6px; padding: 10px 22px; margin: 6px; font-size: 16px; }
+  #loginModal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center; justify-content: center; z-index: 60; }
+  #loginModal .card { background: #fff; padding: 24px; border-radius: 8px; width: 320px; }
+  #loginModal input { display: block; width: 100%; margin: 8px 0; padding: 10px; box-sizing: border-box; }
+  #loginModal button.signin { background: #f58426; color: #fff; border: 0; padding: 12px; width: 100%; font-weight: 700; }
+  #searchForm { padding: 18px; max-width: 520px; }
+  .field { margin-bottom: 14px; position: relative; }
+  .field label { display: block; font-size: 12px; color: #555; margin-bottom: 4px; }
+  .field input, .field select { width: 100%; padding: 10px; box-sizing: border-box; font-size: 15px; }
+  ul.suggest { display: none; position: absolute; background: #fff; border: 1px solid #ccc; margin: 0; padding: 0; list-style: none; width: 100%; z-index: 20; }
+  ul.suggest li { padding: 8px 10px; cursor: pointer; }
+  ul.suggest li:hover { background: #eef; }
+</style>
+</head>
+<body>
+<header>
+  <strong>IRCTC</strong>
+  <span>
+    <span id="accountLabel" style="display:none">My Account</span>
+    <button id="profileBtn" aria-label="Login" title="Login" style="font-size:20px">👤</button>
+  </span>
+</header>
+
+<div id="langAlert">
+  <div class="card">
+    <div style="font-weight:700">आईआरसीटीसी में आपका स्वागत है</div>
+    <div style="font-weight:700; margin: 4px 0 12px">Welcome to IRCTC</div>
+    <div>कृपया अपनी पसंदीदा भाषा का चयन करें</div>
+    <div>Please select your preferred language.</div>
+    <div style="margin-top:12px">
+      <button type="button" data-lang="hi">हिंदी</button>
+      <button type="button" data-lang="en">English</button>
+    </div>
+  </div>
+</div>
+
+<div id="loginModal" role="dialog" aria-label="Login dialog">
+  <div class="card">
+    <h2 style="text-align:center">LOGIN</h2>
+    <input id="loginUser" type="text" placeholder="User Name" aria-label="User Name">
+    <input id="loginPass" type="password" placeholder="Password" aria-label="Password">
+    <div id="captchaBlock" style="display:none">
+      <img id="captchaImg" alt="captcha image" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=">
+      <input id="captchaInput" type="text" placeholder="Enter Captcha" aria-label="Enter Captcha">
+    </div>
+    <button type="button" class="signin" id="signInBtn">SIGN IN</button>
+  </div>
+</div>
+
+<section id="searchForm">
+  <div class="field">
+    <label for="fromInput">From</label>
+    <input id="fromInput" type="text" placeholder="From *" aria-label="From station" autocomplete="off">
+    <ul class="suggest" id="fromSuggest"></ul>
+  </div>
+  <div class="field">
+    <label for="toInput">To</label>
+    <input id="toInput" type="text" placeholder="To *" aria-label="To station" autocomplete="off">
+    <ul class="suggest" id="toSuggest"></ul>
+  </div>
+  <div class="field">
+    <label for="dateInput">Date of Journey</label>
+    <input id="dateInput" type="text" placeholder="DD/MM/YYYY *" aria-label="Date of Journey">
+  </div>
+  <div class="field">
+    <label for="classSelect">Class</label>
+    <select id="classSelect" aria-label="Class">
+      <option>All Classes</option><option>EA</option><option>1A</option><option>EV</option>
+      <option>EC</option><option>2A</option><option>FC</option><option>3A</option>
+      <option>3E</option><option>VC</option><option>CC</option><option>SL</option>
+      <option>VS</option><option>2S</option>
+    </select>
+  </div>
+  <div class="field">
+    <label for="quotaSelect">Quota</label>
+    <select id="quotaSelect" aria-label="Quota">
+      <option>GENERAL</option><option>LADIES</option><option>LOWER BERTH/SR.CITIZEN</option>
+      <option>PERSON WITH DISABILITY</option><option>DUTY PASS</option>
+      <option>TATKAL</option><option>PREMIUM TATKAL</option>
+    </select>
+  </div>
+</section>
+
+<script>
+window.__tatkalEventLog = [];
+window.__formSubmits = 0;
+document.addEventListener('submit', function(e){ window.__formSubmits++; e.preventDefault(); }, true);
+
+var qs = new URLSearchParams(location.search);
+if (qs.get('captcha') === '1') {
+  document.getElementById('captchaBlock').style.display = 'block';
+}
+
+document.querySelectorAll('#langAlert button').forEach(function(b){
+  b.addEventListener('click', function(){
+    document.getElementById('langAlert').style.display = 'none';
+  });
+});
+
+document.getElementById('profileBtn').addEventListener('click', function(){
+  document.getElementById('loginModal').style.display = 'flex';
+});
+
+document.getElementById('signInBtn').addEventListener('click', function(){
+  var u = document.getElementById('loginUser').value;
+  var p = document.getElementById('loginPass').value;
+  if (qs.get('captcha') === '1') return; // captcha variant: login never completes on its own
+  if (u && p) {
+    document.getElementById('loginModal').style.display = 'none';
+    document.getElementById('accountLabel').style.display = 'inline';
+    document.getElementById('profileBtn').style.display = 'none';
+  }
+});
+
+var STATIONS = [
+  { code: 'BCT', name: 'Mumbai Central' },
+  { code: 'NDLS', name: 'New Delhi' },
+  { code: 'LKO', name: 'Lucknow' },
+  { code: 'MAS', name: 'Chennai Central' },
+  { code: 'HWH', name: 'Howrah Jn' },
+];
+function wireAutocomplete(inputId, listId){
+  var input = document.getElementById(inputId);
+  var list = document.getElementById(listId);
+  input.addEventListener('input', function(){
+    var q = input.value.trim().toLowerCase();
+    list.innerHTML = '';
+    if (!q) { list.style.display = 'none'; return; }
+    var hits = STATIONS.filter(function(s){
+      return s.code.toLowerCase().indexOf(q) !== -1 || s.name.toLowerCase().indexOf(q) !== -1;
+    });
+    hits.forEach(function(s){
+      var li = document.createElement('li');
+      li.textContent = s.code + ' - ' + s.name;
+      li.addEventListener('click', function(){
+        input.value = s.code + ' - ' + s.name;
+        list.style.display = 'none';
+      });
+      list.appendChild(li);
+    });
+    list.style.display = hits.length ? 'block' : 'none';
+  });
+  document.addEventListener('click', function(e){
+    if (e.target !== input) list.style.display = 'none';
+  });
+}
+wireAutocomplete('fromInput', 'fromSuggest');
+wireAutocomplete('toInput', 'toSuggest');
+</script>
+</body>
+</html>

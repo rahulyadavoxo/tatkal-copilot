@@ -19,9 +19,10 @@ import { BERTH_LABELS, C } from '../theme';
 import { TATKAL_TIMING } from '../timingConfig';
 import { tatkalBookingOpen } from '../core/timing';
 import {
+  IRCTC_CLASSES,
+  IRCTC_QUOTAS,
   MAX_PASSENGERS_PER_TATKAL_PNR,
-  TATKAL_AC_CLASSES,
-  TATKAL_NONAC_CLASSES,
+  isAcClass,
 } from '../core/tatkalConfig';
 import {
   loadPassengers,
@@ -50,6 +51,7 @@ export default function TripSetupScreen({
   const [to, setTo] = useState('');
   const [journeyDate, setJourneyDate] = useState('');
   const [classCode, setClassCode] = useState<string>('3A');
+  const [quota, setQuota] = useState<string>('TATKAL');
   const [selected, setSelected] = useState<string[]>([]);
   const [contactMobile, setContactMobile] = useState('');
   const [travelInsurance, setTravelInsurance] = useState(true);
@@ -70,6 +72,7 @@ export default function TripSetupScreen({
         setTo(trip.to);
         setJourneyDate(trip.journeyDate);
         setClassCode(trip.classCode);
+        setQuota(trip.quota ?? 'TATKAL');
         setSelected(trip.passengerIds);
         setContactMobile(trip.contactMobile ?? '');
         setTravelInsurance(trip.travelInsurance ?? true);
@@ -79,7 +82,7 @@ export default function TripSetupScreen({
   }, [editing, tripId]);
   useFocusLoad(reload);
 
-  const isAC = (TATKAL_AC_CLASSES as readonly string[]).includes(classCode);
+  const isAC = isAcClass(classCode);
 
   const togglePax = (id: string) => {
     setSelected((s) =>
@@ -136,6 +139,7 @@ export default function TripSetupScreen({
       to: tt,
       journeyDate: d,
       classCode,
+      quota,
       isAC,
       passengerIds: selected,
       contactMobile: mob,
@@ -185,9 +189,21 @@ export default function TripSetupScreen({
       <DatePickerField label="Journey date" value={journeyDate} onSelect={setJourneyDate} />
 
       <Text style={styles.label}>Class — AC opens 10:00, Non-AC opens 11:00 IST</Text>
+      <Text style={styles.groupLabel}>All classes</Text>
+      <View style={styles.chips}>
+        {IRCTC_CLASSES.filter((c) => c === 'All Classes').map((c) => (
+          <TouchableOpacity
+            key={c}
+            style={[styles.chip, classCode === c && styles.chipOn]}
+            onPress={() => setClassCode(c)}
+          >
+            <Text style={[styles.chipText, classCode === c && styles.chipTextOn]}>{c}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
       <Text style={styles.groupLabel}>AC classes</Text>
       <View style={styles.chips}>
-        {TATKAL_AC_CLASSES.map((c) => (
+        {IRCTC_CLASSES.filter((c) => c !== 'All Classes' && isAcClass(c)).map((c) => (
           <TouchableOpacity
             key={c}
             style={[styles.chip, classCode === c && styles.chipOn]}
@@ -199,13 +215,26 @@ export default function TripSetupScreen({
       </View>
       <Text style={styles.groupLabel}>Non-AC classes</Text>
       <View style={styles.chips}>
-        {TATKAL_NONAC_CLASSES.map((c) => (
+        {IRCTC_CLASSES.filter((c) => !isAcClass(c)).map((c) => (
           <TouchableOpacity
             key={c}
             style={[styles.chip, classCode === c && styles.chipOn]}
             onPress={() => setClassCode(c)}
           >
             <Text style={[styles.chipText, classCode === c && styles.chipTextOn]}>{c}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <Text style={styles.label}>Quota (as shown on IRCTC’s search page)</Text>
+      <View style={styles.chips}>
+        {IRCTC_QUOTAS.map((q) => (
+          <TouchableOpacity
+            key={q}
+            style={[styles.chip, quota === q && styles.chipOn]}
+            onPress={() => setQuota(q)}
+          >
+            <Text style={[styles.chipText, quota === q && styles.chipTextOn]}>{q}</Text>
           </TouchableOpacity>
         ))}
       </View>

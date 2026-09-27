@@ -29,6 +29,65 @@ export const TATKAL_AC_CLASSES = ['2A', '3A', 'CC', 'EC', '3E'] as const;
  *  Source: docs/IRCTC_RULES.md §1 */
 export const TATKAL_NONAC_CLASSES = ['SL', 'FC', '2S'] as const;
 
+/** Full class list shown in IRCTC's search-form class dropdown, in the
+ *  order the user asked for (from their IRCTC app screenshot 2026-09-27).
+ *  This is the trip-setup selector list; the TATKAL_*_CLASSES constants
+ *  above remain the Tatkal-eligibility rule source. */
+export const IRCTC_CLASSES = [
+  'All Classes',
+  'EA',
+  '1A',
+  'EV',
+  'EC',
+  '2A',
+  'FC',
+  '3A',
+  '3E',
+  'VC',
+  'CC',
+  'SL',
+  'VS',
+  '2S',
+] as const;
+
+/** AC classes among IRCTC_CLASSES (Vistadome EV/VC/VS and Anubhuti EA are
+ *  air-conditioned coaches). Used only for the Tatkal countdown timing:
+ *  AC opens 10:00 IST, non-AC 11:00 IST.
+ *  'All Classes' and any unknown code resolve to AC (the earlier 10:00
+ *  window) — being ready an hour early is harmless, missing the 10:00
+ *  window is not. */
+const AC_CLASS_SET: ReadonlySet<string> = new Set([
+  'EA',
+  '1A',
+  'EV',
+  'EC',
+  '2A',
+  '3A',
+  '3E',
+  'VC',
+  'CC',
+  'VS',
+]);
+const NON_AC_CLASS_SET: ReadonlySet<string> = new Set(['FC', 'SL', '2S']);
+
+export function isAcClass(classCode: string): boolean {
+  if (NON_AC_CLASS_SET.has(classCode)) return false;
+  return true; // AC set, 'All Classes', or unknown — earliest countdown wins
+}
+
+/** Quota options shown on IRCTC's search form (user screenshot 2026-09-27:
+ *  GENERAL, LADIES, LOWER BERTH/SR.CITIZEN, PERSON WITH DISABILITY,
+ *  DUTY PASS, TATKAL, PREMIUM TATKAL). */
+export const IRCTC_QUOTAS = [
+  'GENERAL',
+  'LADIES',
+  'LOWER BERTH/SR.CITIZEN',
+  'PERSON WITH DISABILITY',
+  'DUTY PASS',
+  'TATKAL',
+  'PREMIUM TATKAL',
+] as const;
+
 /** Max passengers per Tatkal PNR.
  *  Source: docs/IRCTC_RULES.md §1/§6 (conflicts with 5-pax harness
  *  assumption — harness must cover 4-pax case; see §6). */
