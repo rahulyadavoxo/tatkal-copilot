@@ -1,4 +1,4 @@
-import { IRCTC_CLASSES, IRCTC_QUOTAS, isAcClass } from '../tatkalConfig';
+import { IRCTC_CLASSES, IRCTC_QUOTAS, isAcClass, isTatkalQuota } from '../tatkalConfig';
 
 describe('IRCTC_CLASSES (user-requested selector list)', () => {
   test('contains exactly the 14 requested options in order', () => {
@@ -61,5 +61,22 @@ describe('IRCTC_QUOTAS (user-requested quota list)', () => {
       'TATKAL',
       'PREMIUM TATKAL',
     ]);
+  });
+});
+
+describe('isTatkalQuota', () => {
+  test('true only for the two Tatkal quotas', () => {
+    expect(isTatkalQuota('TATKAL')).toBe(true);
+    expect(isTatkalQuota('PREMIUM TATKAL')).toBe(true);
+    expect(isTatkalQuota('tatkal')).toBe(true);
+    expect(isTatkalQuota(' premium tatkal ')).toBe(true);
+  });
+  test('false for every other quota', () => {
+    for (const q of IRCTC_QUOTAS) {
+      if (q === 'TATKAL' || q === 'PREMIUM TATKAL') continue;
+      expect(isTatkalQuota(q)).toBe(false);
+    }
+    expect(isTatkalQuota('GENERAL')).toBe(false);
+    expect(isTatkalQuota('')).toBe(false);
   });
 });

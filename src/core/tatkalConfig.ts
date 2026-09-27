@@ -88,6 +88,14 @@ export const IRCTC_QUOTAS = [
   'PREMIUM TATKAL',
 ] as const;
 
+/** True only for the two quotas that open in a timed Tatkal window
+ *  (10:00 AC / 11:00 non-AC). Every other quota books anytime — no
+ *  countdown, no FIRE wait. */
+export function isTatkalQuota(quota: string): boolean {
+  const q = (quota || '').trim().toUpperCase();
+  return q === 'TATKAL' || q === 'PREMIUM TATKAL';
+}
+
 /** Max passengers per Tatkal PNR.
  *  Source: docs/IRCTC_RULES.md §1/§6 (conflicts with 5-pax harness
  *  assumption — harness must cover 4-pax case; see §6). */

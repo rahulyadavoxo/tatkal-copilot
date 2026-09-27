@@ -1,8 +1,14 @@
 /**
  * Countdown — ticks every second toward the Tatkal window open.
  *
- * - T-5min: "Warm up IRCTC session" appears → opens the Booking screen early
- *   so the user can log in to IRCTC ahead of time.
+ * QUOTA BRANCHING (user request 2026-09-27): the countdown + FIRE wait
+ * exists ONLY for TATKAL / PREMIUM TATKAL quotas. For any other quota
+ * (GENERAL, LADIES, …) the screen shows a plain "Book now" button that
+ * opens Booking immediately — no waiting.
+ *
+ * Tatkal quotas:
+ * - T-5min: "Warm up IRCTC session" appears → opens the Booking screen
+ *   early so the user can log in to IRCTC ahead of time.
  * - At/after open: big FIRE button enables → opens Booking for the fill.
  *
  * The FIRE button enables EXACTLY at the computed open instant — no 60s
@@ -16,6 +22,7 @@ import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { C } from '../theme';
 import { TATKAL_TIMING } from '../timingConfig';
 import { msUntilTatkalOpen, tatkalBookingOpen } from '../core/timing';
+import { isTatkalQuota } from '../core/tatkalConfig';
 import { loadTrips, type Trip } from '../vaultStore';
 import type { Nav } from '../App';
 
@@ -73,6 +80,33 @@ export default function CountdownScreen({ nav, tripId }: { nav: Nav; tripId: str
     );
   }
 
+  // Non-Tatkal quotas: no countdown, no FIRE wait — book straight away.
+  if (!isTatkalQuota(trip.quota)) {
+    return (
+      <View style={styles.root}>
+        <Text style={styles.title}>
+          {trip.trainNo} · {trip.from} → {trip.to}
+        </Text>
+        <Text style={styles.sub}>
+          {trip.journeyDate} · {trip.classCode} · {trip.quota} ·{' '}
+          {trip.passengerIds.length} pax
+        </Text>
+        <Text style={styles.sub}>No Tatkal window for this quota — book anytime.</Text>
+
+        <TouchableOpacity
+          style={styles.fire}
+          onPress={() => nav.go({ name: 'booking', tripId })}
+        >
+          <Text style={styles.fireText}>🎫 Book now — open IRCTC booking</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.back} onPress={nav.back}>
+          <Text style={styles.backText}>← Back</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
   const isOpen = msLeft <= 0;
   const missed = msLeft < -MISSED_AFTER_MS;
   const showWarmup = !isOpen && msLeft <= WARMUP_MS;
@@ -83,7 +117,8 @@ export default function CountdownScreen({ nav, tripId }: { nav: Nav; tripId: str
         {trip.trainNo} · {trip.from} → {trip.to}
       </Text>
       <Text style={styles.sub}>
-        {trip.journeyDate} · {trip.classCode} · {trip.passengerIds.length} pax
+        {trip.journeyDate} · {trip.classCode} · {trip.quota} ·{' '}
+        {trip.passengerIds.length} pax
       </Text>
       <Text style={styles.sub}>Window opens {istString(open)} IST</Text>
 

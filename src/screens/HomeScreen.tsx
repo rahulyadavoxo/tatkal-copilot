@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { C } from '../theme';
 import { loadTrips, saveTrips, type Trip } from '../vaultStore';
+import { isTatkalQuota } from '../core/tatkalConfig';
 import type { Nav } from '../App';
 import { useFocusLoad } from './hooks';
 
@@ -64,9 +65,13 @@ export default function HomeScreen({ nav }: { nav: Nav }) {
               </View>
             </View>
             <Text style={styles.cardSub}>
-              {item.journeyDate} · {item.classCode}
-              {item.isAC ? ' (AC, opens 10:00)' : ' (Non-AC, opens 11:00)'} ·{' '}
+              {item.journeyDate} · {item.classCode} · {item.quota ?? 'TATKAL'} ·{' '}
               {item.passengerIds.length} pax
+              {isTatkalQuota(item.quota ?? 'TATKAL')
+                ? item.isAC
+                  ? ' · opens 10:00'
+                  : ' · opens 11:00'
+                : ' · book anytime'}
             </Text>
           </TouchableOpacity>
         )}
