@@ -365,6 +365,7 @@ async function waitForEvent(page, type, timeoutMs) {
         cls: document.getElementById('classSelect').selectedOptions[0].text,
         quota: document.getElementById('quotaSelect').selectedOptions[0].text,
         submits: window.__formSubmits,
+        dpClosed: document.getElementById('pDatepicker').style.display === 'none',
       }));
       if (!st.langHidden) fail('PREBOOK: language alert was not dismissed');
       if (!st.accountShown || st.account !== 'My Account') fail('PREBOOK: not logged in after SIGN IN');
@@ -375,6 +376,7 @@ async function waitForEvent(page, type, timeoutMs) {
       if (st.cls !== '3A') fail('PREBOOK: class wrong (got "' + st.cls + '")');
       if (st.quota !== 'TATKAL') fail('PREBOOK: quota wrong (got "' + st.quota + '")');
       if (st.submits !== 0) fail('PREBOOK: a form was submitted');
+      if (!st.dpClosed) fail('PREBOOK: calendar overlay left open (would block dropdowns)');
       console.log('PREBOOK_OK');
       await page.close();
     }

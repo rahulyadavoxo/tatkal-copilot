@@ -466,12 +466,98 @@ function findDateInput(){
   }
   return null;
 }
+function dateDigits(v){ return (v || '').replace(/[^0-9]/g, ''); }
+function dateInputValueMatches(input, dmy){
+  var v = dateDigits(input.value), t = dateDigits(dmy);
+  return v.length >= 6 && v === t;
+}
+function parseDMY(dmy){
+  var m = /^(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})$/.exec(dmy || '');
+  return m ? { d: +m[1], m: +m[2], y: +m[3] } : null;
+}
+// The live IRCTC date field is a PrimeNG p-calendar: a readonly input whose
+// value can only be set by tapping it and picking a day in the overlay.
+// Typing into it never registers, and a left-open overlay blocks the
+// class/quota dropdowns — both caused the 2026-09-27 on-device stall.
+function datepickerOverlay(){
+  var dps = document.querySelectorAll('.p-datepicker');
+  for (var i = 0; i < dps.length; i++) {
+    if (visible(dps[i]) && dps[i].querySelector('.p-datepicker-calendar')) return dps[i];
+  }
+  return null;
+}
+var CAL_MONTHS = ['january','february','march','april','may','june','july','august','september','october','november','december'];
+function overlayMonthYear(dp){
+  var ms = dp.querySelector('select.p-datepicker-month');
+  var ys = dp.querySelector('select.p-datepicker-year');
+  if (ms && ys) {
+    var y = parseInt(ys.value || (ys.options[ys.selectedIndex] && ys.options[ys.selectedIndex].text), 10);
+    if (ms.selectedIndex >= 0 && y) return { m: ms.selectedIndex + 1, y: y };
+  }
+  var title = dp.querySelector('.p-datepicker-title');
+  var t = norm((title && (title.innerText || title.textContent)) || '');
+  var m = null;
+  for (var i = 0; i < CAL_MONTHS.length; i++) if (t.indexOf(CAL_MONTHS[i]) >= 0) m = i + 1;
+  var ym = /(\\d{4})/.exec(t);
+  return (m && ym) ? { m: m, y: +ym[1] } : null;
+}
+function dismissCalendar(){
+  try {
+    var ev = new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true });
+    document.dispatchEvent(ev);
+  } catch (e) {}
+}
+async function pickDateFromCalendar(input, target){
+  clickEl(input);
+  var dp = null;
+  for (var w = 0; w < 20 && !dp; w++) { await sleep(250); dp = datepickerOverlay(); }
+  if (!dp) return false;
+  for (var n = 0; n < 30; n++) {
+    var shown = overlayMonthYear(dp);
+    if (!shown) return false;
+    if (shown.m === target.m && shown.y === target.y) break;
+    var goPrev = (shown.y > target.y) || (shown.y === target.y && shown.m > target.m);
+    var btn = dp.querySelector(goPrev ? '.p-datepicker-prev' : '.p-datepicker-next');
+    if (!btn || !visible(btn)) return false;
+    clickEl(btn);
+    await sleep(450);
+    dp = datepickerOverlay() || dp;
+  }
+  var fin = overlayMonthYear(dp);
+  if (!fin || fin.m !== target.m || fin.y !== target.y) return false;
+  var cells = dp.querySelectorAll('.p-datepicker-calendar td');
+  var hit = null;
+  for (var c = 0; c < cells.length; c++) {
+    var td = cells[c];
+    var cls = ' ' + (td.className || '') + ' ';
+    if (cls.indexOf('p-disabled') >= 0 || cls.indexOf('other-month') >= 0) continue;
+    var inner = td.querySelector('span, a') || td;
+    if (norm(inner.innerText || inner.textContent || '') === String(target.d)) { hit = inner; break; }
+  }
+  if (!hit) return false;
+  clickEl(hit);
+  await sleep(600);
+  dismissCalendar();
+  await sleep(300);
+  return dateInputValueMatches(input, PLAN.dateDMY);
+}
 async function stepDate(){
   var input = findDateInput();
   if (!input) return stepMissing('date');
-  if ((input.value || '').trim() === PLAN.dateDMY) return stepOk('date', { skipped: true });
-  setNativeInputValue(input, PLAN.dateDMY);
-  await sleep(400);
+  if (dateInputValueMatches(input, PLAN.dateDMY)) return stepOk('date', { skipped: true });
+  var target = parseDMY(PLAN.dateDMY);
+  if (!target) return stepMissing('date');
+  var ro = false;
+  try { ro = input.hasAttribute('readonly') || !!input.readOnly; } catch (e) {}
+  if (!ro) {
+    setNativeInputValue(input, PLAN.dateDMY);
+    await sleep(400);
+  }
+  if (!dateInputValueMatches(input, PLAN.dateDMY)) {
+    var ok = await pickDateFromCalendar(input, target);
+    if (!ok || !dateInputValueMatches(input, PLAN.dateDMY)) return stepMissing('date');
+  }
+  if (datepickerOverlay()) { dismissCalendar(); await sleep(300); }
   return stepOk('date');
 }
 function findDropdown(res){

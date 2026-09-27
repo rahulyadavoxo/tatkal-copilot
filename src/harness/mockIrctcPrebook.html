@@ -93,7 +93,15 @@
   </div>
   <div class="field">
     <label for="dateInput">Date of Journey</label>
-    <input id="dateInput" type="text" placeholder="DD/MM/YYYY *" aria-label="Date of Journey">
+    <input id="dateInput" type="text" placeholder="DD/MM/YYYY *" aria-label="Date of Journey" readonly>
+    <div class="p-datepicker" id="pDatepicker" style="display:none;position:absolute;z-index:50;background:#fff;border:1px solid #ccc;padding:8px">
+      <div class="p-datepicker-header" style="display:flex;justify-content:space-between;align-items:center">
+        <button type="button" class="p-datepicker-prev" id="dpPrev">&#8249;</button>
+        <div class="p-datepicker-title"><span id="dpTitle"></span></div>
+        <button type="button" class="p-datepicker-next" id="dpNext">&#8250;</button>
+      </div>
+      <table class="p-datepicker-calendar"><tbody id="dpBody"></tbody></table>
+    </div>
   </div>
   <div class="field">
     <label for="classSelect">Class</label>
@@ -140,6 +148,50 @@ if (qs.get('captcha') === '1') {
 if (qs.get('realotp') === '1') {
   document.getElementById('realOtpBlock').style.display = 'block';
 }
+
+// ---- PrimeNG-style date picker (mirrors live IRCTC p-calendar) ----
+(function(){
+  var NAMES = ['January','February','March','April','May','June','July',
+               'August','September','October','November','December'];
+  var viewM = 9, viewY = 2026; // opens on September 2026
+  var dateInput = document.getElementById('dateInput');
+  var dp = document.getElementById('pDatepicker');
+  function render(){
+    document.getElementById('dpTitle').textContent = NAMES[viewM - 1] + ' ' + viewY;
+    var body = document.getElementById('dpBody');
+    body.innerHTML = '';
+    var dim = new Date(viewY, viewM, 0).getDate();
+    var tr = document.createElement('tr');
+    for (var d = 1; d <= dim; d++) {
+      var td = document.createElement('td');
+      var sp = document.createElement('span');
+      sp.textContent = d;
+      // days before mock "today" (27/09/2026) are disabled
+      if (viewY === 2026 && viewM === 9 && d < 27) td.className = 'p-disabled';
+      (function(day){
+        sp.addEventListener('click', function(){
+          if (td.className.indexOf('p-disabled') >= 0) return;
+          dateInput.value = ('0' + day).slice(-2) + '/' + ('0' + viewM).slice(-2) + '/' + viewY;
+          dp.style.display = 'none';
+        });
+      })(d);
+      td.appendChild(sp);
+      tr.appendChild(td);
+      if (d % 7 === 0) { body.appendChild(tr); tr = document.createElement('tr'); }
+    }
+    if (tr.children.length) body.appendChild(tr);
+  }
+  dateInput.addEventListener('click', function(){ render(); dp.style.display = 'block'; });
+  document.getElementById('dpPrev').addEventListener('click', function(){
+    viewM--; if (viewM < 1) { viewM = 12; viewY--; } render();
+  });
+  document.getElementById('dpNext').addEventListener('click', function(){
+    viewM++; if (viewM > 12) { viewM = 1; viewY++; } render();
+  });
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') dp.style.display = 'none';
+  });
+})();
 
 document.querySelectorAll('#langAlert button').forEach(function(b){
   b.addEventListener('click', function(){
