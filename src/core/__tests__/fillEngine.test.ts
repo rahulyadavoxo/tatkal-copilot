@@ -131,14 +131,15 @@ describe('pacing math', () => {
       optionText: ['Yes, and I accept'],
     });
 
-    // A plan that opts out produces untick / "no insurance" actions instead.
+    // A plan that opts out leaves the auto-upgradation checkbox exactly as
+    // IRCTC renders it ('leave' = never touch it) and picks "no insurance".
     const off = buildFieldActions({
       ...FOUR_PAX,
       autoUpgradation: false,
       travelInsurance: false,
       contactMobile: '',
     });
-    expect(off.filter((a) => a.label === 'auto-upgradation')[0].value).toBe('off');
+    expect(off.filter((a) => a.label === 'auto-upgradation')[0].value).toBe('leave');
     expect(off.filter((a) => a.label === 'travel-insurance')[0]).toMatchObject({
       value: 'no',
       optionText: ["No, I don't want"],

@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mock IRCTC — booking flow (search → train → passenger → review)</title>
+<style>
+  body { font-family: sans-serif; margin: 0; padding: 12px; }
+  .train-card { border: 1px solid #999; border-radius: 8px; padding: 12px; margin: 12px 0; }
+  .class-boxes { display: flex; gap: 8px; }
+  .class-box { border: 1px solid #999; border-radius: 8px; padding: 10px 14px; cursor: pointer; }
+  .class-tabs button, .date-cards button { margin: 4px; padding: 8px 12px; }
+  .class-tabs button[aria-selected="true"] { background: #f90; color: #fff; }
+  .date-cards button.selected { background: #06c; color: #fff; }
+  #confirmPopup { position: fixed; top: 30%; left: 10%; right: 10%; background: #fff;
+    border: 2px solid #333; border-radius: 8px; padding: 16px; z-index: 50; }
+  #stickyBar { position: sticky; bottom: 0; background: #fff; padding: 12px;
+    border-top: 1px solid #999; display: flex; justify-content: space-between; }
+  #stickyBar button { background: #f90; color: #fff; padding: 12px 32px; font-size: 16px; }
+  #paymentGateway { border: 3px dashed #090; padding: 24px; margin: 16px 0; font-weight: bold; }
+  label { display: block; margin: 6px 0; }
+</style>
+</head>
+<body>
+<script>
+  window.__formSubmits = 0;
+  window.__searchClicked = 0;
+  window.__boxClicked = '';
+  window.__yesClicked = 0;
+  window.__continueClicked = 0;
+  window.__tabClicked = '';
+  window.__dateClicked = '';
+  window.__bookNowTrain = '';
+  document.addEventListener('submit', function (e) {
+    window.__formSubmits++;
+    e.preventDefault();
+  }, true);
+  var qs = new URLSearchParams(location.search);
+  window.__noPopup = qs.get('nopopup') === '1';
+  window.__startAtPax = qs.get('state') === 'passenger';
+</script>
+
+<!-- state 1: search form -->
+<div id="searchSection">
+  <h1>Book Your Ticket</h1>
+  <input id="fromInput" placeholder="From" value="DTO - DALTONGANJ">
+  <input id="toInput" placeholder="To" value="NDLS - NEW DELHI">
+  <input id="dateInput" value="29/09/2026">
+  <button id="searchBtn">Search Trains</button>
+</div>
+
+<!-- state 2: train list — cards start COLLAPSED like the real IRCTC page -->
+<div id="trainList" style="display:none">
+  <div class="train-card" id="card12873">
+    <div class="train-name">SWARNJAYANTI EX (12873)</div>
+    <div class="times"><span>19:02</span> — <span>18:08</span> — <span>13:10</span></div>
+    <div class="train-days">M T W T F S S</div>
+    <div class="class-boxes">
+      <div class="class-box" data-code="SL">Sleeper (SL)<br><span>Refresh &#8635;</span></div>
+      <div class="class-box" data-code="3E">AC 3 Economy (3E)<br><span>Refresh &#8635;</span></div>
+    </div>
+    <div class="expanded" style="display:none">
+      <div class="class-tabs" role="tablist">
+        <button role="tab" aria-selected="false">SL</button>
+        <button role="tab" aria-selected="false">3E</button>
+        <button role="tab" aria-selected="false">3A</button>
+        <button role="tab" aria-selected="false">2A</button>
+        <button role="tab" aria-selected="false">1A</button>
+        <button class="tab-close" aria-label="close">&#1005;</button>
+      </div>
+      <div class="date-cards">
+        <button class="date-card">Tue, 29 Sep<br><span>WL35</span></button>
+        <button class="date-card">Thu, 01 Oct<br><span>WL30</span></button>
+      </div>
+    </div>
+    <button class="book-now" data-train="12873">Book Now</button>
+  </div>
+  <div class="train-card" id="card12877">
+    <div class="train-name">NDLS GARIB RATH (12877)</div>
+    <div class="times"><span>21:18</span> — <span>13:52</span> — <span>11:10</span></div>
+    <div class="class-boxes">
+      <div class="class-box" data-code="3A">AC 3 Tier (3A)<br><span>Refresh &#8635;</span></div>
+      <div class="class-box" data-code="CC">AC Chair Car (CC)<br><span>Refresh &#8635;</span></div>
+    </div>
+    <div class="expanded" style="display:none">
+      <div class="class-tabs" role="tablist">
+        <button role="tab" aria-selected="false">3A</button>
+        <button role="tab" aria-selected="false">CC</button>
+      </div>
+      <div class="date-cards">
+        <button class="date-card">Tue, 29 Sep<br><span>WL12</span></button>
+      </div>
+    </div>
+    <button class="book-now" data-train="12877">Book Now</button>
+  </div>
+</div>
+
+<!-- state 2b: station-mismatch confirmation (real page: "✓ Yes") -->
+<div id="confirmPopup" role="dialog" style="display:none">
+  <div class="popup-title">Confirmation</div>
+  <div class="popup-body">You searched trains from DTO to NDLS (NEW DELHI) but booking from DTO to ANVT. Do you want to continue with it? Do you want to continue with the same?</div>
+  <button id="popupYes">&#10003; Yes</button>
+  <button id="popupNo">&#10005; No</button>
+</div>
+
+<!-- state 3: passenger + review page (mirrors the real IRCTC sections) -->
+<div id="paxPage" style="display:none">
+  <div id="cobrand">
+    <div><strong>IRCTC Co-branded Card Benefits</strong></div>
+    <label><input type="radio" name="cobrand" value="earn" checked> Earn Loyalty Points</label>
+    <label><input type="radio" name="cobrand" value="paypoints"> Pay with Loyalty Points</label>
+    <label><input type="radio" name="cobrand" id="skipRadio" value="skip"> Skip</label>
+    <div>( Pay Less, Earn More: 1% PG Waiver + upto 10% Reward Points )</div>
+  </div>
+
+  <h2>Passenger Details</h2>
+  <input placeholder="Full Name as per Govt. ID" id="paxName">
+  <input placeholder="Age" id="paxAge">
+
+  <h2>Contact Details</h2>
+  <div>(Ticket details will be sent to email and registered mobile number)</div>
+  <input placeholder="Mobile Number" id="contactMobile">
+
+  <h2>GST Details (Optional)</h2>
+  <input placeholder="GST Identification Number" id="gstin">
+
+  <h2>Other Preferences</h2>
+  <label><input type="checkbox" id="autoUpg"> Consider for Auto Upgradation (In higher class you may or may not get lower berth)</label>
+
+  <h2>Payment Mode</h2>
+  <label><input type="radio" name="paymode" id="payCards" value="cards" checked> Pay through Credit &amp; Debit Cards / Net Banking / Wallets / EMI / UPI_CC / UPI_CL / Rewards and Others</label>
+  <div>Convenience Fee: &#8377;15/- + GST</div>
+  <label><input type="radio" name="paymode" id="payBhim" value="bhim"> Pay through BHIM/UPI</label>
+  <div>Convenience Fee: &#8377;10/- + GST</div>
+
+  <div id="stickyBar">
+    <span>&#8377; 550 per person</span>
+    <button id="continueBtn">Continue</button>
+  </div>
+  <div id="paymentGateway" style="display:none">PAYMENT GATEWAY — everything from here is manual</div>
+</div>
+
+<script>
+  document.getElementById('searchBtn').addEventListener('click', function () {
+    window.__searchClicked++;
+    document.getElementById('searchSection').style.display = 'none';
+    setTimeout(function () {
+      document.getElementById('trainList').style.display = 'block';
+    }, 800);
+  });
+  // Class box tap expands the card (like the real IRCTC page).
+  Array.from(document.querySelectorAll('.class-box')).forEach(function (b) {
+    b.addEventListener('click', function () {
+      window.__boxClicked = b.getAttribute('data-code');
+      var card = b.closest('.train-card');
+      card.querySelector('.expanded').style.display = 'block';
+      var code = b.getAttribute('data-code');
+      Array.from(card.querySelectorAll('.class-tabs button[role="tab"]')).forEach(function (t) {
+        t.setAttribute('aria-selected', t.textContent.trim() === code ? 'true' : 'false');
+      });
+    });
+  });
+  Array.from(document.querySelectorAll('.class-tabs button[role="tab"]')).forEach(function (b) {
+    b.addEventListener('click', function () {
+      window.__tabClicked = b.textContent.trim();
+      Array.from(b.parentElement.querySelectorAll('button[role="tab"]')).forEach(function (x) {
+        x.setAttribute('aria-selected', 'false');
+      });
+      b.setAttribute('aria-selected', 'true');
+    });
+  });
+  Array.from(document.querySelectorAll('.date-card')).forEach(function (b) {
+    b.addEventListener('click', function () {
+      window.__dateClicked = b.innerText.split('\n')[0];
+      Array.from(b.parentElement.querySelectorAll('button')).forEach(function (x) {
+        x.classList.remove('selected');
+      });
+      b.classList.add('selected');
+    });
+  });
+  Array.from(document.querySelectorAll('.book-now')).forEach(function (b) {
+    b.addEventListener('click', function () {
+      window.__bookNowTrain = b.getAttribute('data-train');
+      if (window.__noPopup) {
+        document.getElementById('trainList').style.display = 'none';
+        document.getElementById('paxPage').style.display = 'block';
+      } else {
+        document.getElementById('confirmPopup').style.display = 'block';
+      }
+    });
+  });
+  document.getElementById('popupYes').addEventListener('click', function () {
+    window.__yesClicked++;
+    document.getElementById('confirmPopup').style.display = 'none';
+    document.getElementById('trainList').style.display = 'none';
+    document.getElementById('paxPage').style.display = 'block';
+  });
+  document.getElementById('popupNo').addEventListener('click', function () {
+    document.getElementById('confirmPopup').style.display = 'none';
+  });
+  document.getElementById('continueBtn').addEventListener('click', function () {
+    window.__continueClicked++;
+    document.getElementById('paymentGateway').style.display = 'block';
+  });
+  if (window.__startAtPax) {
+    document.getElementById('searchSection').style.display = 'none';
+    document.getElementById('paxPage').style.display = 'block';
+  }
+</script>
+</body>
+</html>

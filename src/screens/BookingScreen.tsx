@@ -18,7 +18,7 @@
  *   reviewed in — see privacy.ts note.
  * - The fill script (src/core/fillEngine.ts) fires ONLY on the explicit
  *   "Fill my form" tap, paced by the engine (G2). It fills passengers and
- *   ticks "Consider for auto upgradation" (the user's stated preference).
+ *   sets "Consider for auto upgradation" only when the trip asks for it.
  *   The engine never submits.
  * - G4: when the engine emits OTP_REQUIRED, the native OTP overlay appears.
  *   OTP entry is manual in v1; the SMS User Consent native module plugs in
@@ -28,6 +28,17 @@
  *   asserts this), and no code in this file clicks any of IRCTC's buttons.
  *   After the form fills, the user reviews it and taps IRCTC's own
  *   Continue / Book / Pay buttons themselves, by hand.
+ *
+ * EXTENDED 2026-09-27 (explicit user instruction — their own IRCTC
+ * account): after the pre-booking stage the user can tap "🔎 Find train &
+ * continue", which runs the post-search engine (taps Search Trains, picks
+ * the train/class/date, taps Book Now, taps Yes on IRCTC's station-mismatch
+ * confirmation) and then auto-chains the fill engine and the review engine
+ * (Skip card option, payment mode per the trip, taps the review page's
+ * Continue). It STOPS at the payment gateway — the user pays by hand in
+ * their own UPI/bank app. CAPTCHA/OTP always halt for manual work; the
+ * engines never solve them, never enter payment details, never submit a
+ * form (scanPostSearchForViolations / scanReviewForViolations assert this).
  *
  * DEVICE-TEST ITEMS (not verifiable here): the engine's label-based locators
  * (placeholder / visible-label / attribute text) are validated against the
@@ -64,6 +75,13 @@ import {
   type FillPlan,
 } from '../core/fillEngine';
 import {
+  buildPostSearchScript,
+  normalizeClassCode,
+  toDateCard,
+  type PostSearchPlan,
+} from '../core/postSearchEngine';
+import { buildReviewScript, type ReviewPaymentMode, type ReviewPlan } from '../core/reviewEngine';
+import {
   buildPrebookScript,
   toDMY,
   type PrebookEvent,
@@ -87,11 +105,13 @@ const STOCK_CHROME_MOBILE_UA =
   'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
 
 // ---------------------------------------------------------------------------
-// NO auto-submit, anywhere. The injected fill script contains zero submit
-// capability (see fillEngine.ts — scanForAutobookViolations asserts this),
-// and there is deliberately no code path in this file that clicks any of
-// IRCTC's buttons. The user reviews the filled form and taps Continue /
-// Book / Pay on IRCTC's page themselves, by hand.
+// NO auto-submit, anywhere. The injected scripts contain zero submit
+// capability (scanForAutobookViolations / scanPostSearchForViolations /
+// scanReviewForViolations assert this). The ONLY IRCTC buttons the app ever
+// clicks are the ones the user explicitly authorized on 2026-09-27 for
+// their own booking: Search Trains, class/date tabs, Book Now, the
+// station-mismatch "Yes", and the review page's Continue. Payment — the
+// actual money step — is always the user's own hand on their own app.
 // ---------------------------------------------------------------------------
 
 // Payment-app intents (upi://, phonepe://, …) open in the user's OWN app —
@@ -123,6 +143,15 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
   const [prebookState, setPrebookState] = useState<'idle' | 'running' | 'done'>('idle');
   const [prebookNotice, setPrebookNotice] = useState<string | null>(null);
   const prebookActive = useRef(false);
+  // Extended booking flow (user-authorized 2026-09-27): search trains →
+  // pick train/class/date → Book Now → Yes on the station-mismatch popup →
+  // auto fill → review (Skip card, payment mode) → Continue. Stops at the
+  // payment gateway; the user pays by hand. Every stage is idempotent, so
+  // re-tapping after a manual CAPTCHA/OTP resumes where it stopped.
+  const [flowPhase, setFlowPhase] = useState<'idle' | 'searching' | 'filling' | 'reviewing' | 'done'>('idle');
+  const [flowNotice, setFlowNotice] = useState<string | null>(null);
+  const flowPhaseRef = useRef(flowPhase);
+  flowPhaseRef.current = flowPhase;
   const otpRefs = useRef<Array<TextInput | null>>([]);
   const probeResolver = useRef<((ready: boolean, reason: string) => void) | null>(null);
 
@@ -154,7 +183,7 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
         prebookActive.current = false;
         setPrebookState('done');
         setPrebookNotice(
-          'Search details are filled — review them on IRCTC\u2019s page, then tap Search Trains there yourself.',
+          'Search details are filled — review them on IRCTC\u2019s page, then tap “🔎 Find train & continue” below.',
         );
         break;
       case 'CAPTCHA_REQUIRED':
@@ -188,6 +217,120 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
     }
   }, []);
 
+  const buildPlan = useCallback(async (): Promise<FillPlan | null> => {
+    if (!trip) return null;
+    const all = await loadPassengers();
+    const pax = trip.passengerIds
+      .map((id) => all.find((p) => p.id === id))
+      .filter((p): p is NonNullable<typeof p> => !!p);
+    if (pax.length === 0) return null;
+    return {
+      trainNo: trip.trainNo,
+      from: trip.from,
+      to: trip.to,
+      dateISO: trip.journeyDate,
+      classCode: trip.classCode,
+      quota: trip.quota ?? 'TATKAL',
+      autoUpgradation: trip.autoUpgradation ?? false, // ticked only when the user selected it
+      contactMobile: trip.contactMobile ?? '',
+      travelInsurance: trip.travelInsurance ?? true,
+      passengers: pax.map((p) => ({
+        name: p.name,
+        age: p.age,
+        gender: p.gender,
+        berthPref: p.berthPref,
+      })),
+    };
+  }, [trip]);
+
+  // Extended flow events (search → select → fill → review). Returns true
+  // when the event is fully consumed here; false lets it fall through to
+  // the fill-event log (pushEvent).
+  const handleFlowEvent = useCallback(
+    (type: string, data: { step?: string }) => {
+      const phase = flowPhaseRef.current;
+      const logIt = (t: string) =>
+        setEvents((prev) => [
+          ...prev.slice(-29),
+          { type: t, t: Date.now(), data } as FillEvent,
+        ]);
+      switch (type) {
+        case 'SEARCH_STARTED':
+          setFlowPhase('searching');
+          return true;
+        case 'SEARCH_STEP':
+        case 'POPUP_YES':
+        case 'POPUP_NONE':
+        case 'REVIEW_STEP':
+          logIt(type);
+          return true;
+        case 'PASSENGER_PAGE_READY':
+          logIt(type);
+          if (phase === 'searching') {
+            // Auto-chain: the fill engine takes over on the passenger page.
+            void buildPlan().then((plan) => {
+              if (!plan) {
+                setFlowPhase('idle');
+                setFlowNotice(
+                  'No passengers saved on this trip — add them on the Passengers screen first.',
+                );
+                return;
+              }
+              setFlowPhase('filling');
+              webRef.current?.injectJavaScript(buildFillScript(plan));
+            });
+          }
+          return true;
+        case 'FILL_COMPLETE':
+          if (phase === 'filling') {
+            // Auto-chain: review (Skip card, payment mode) then Continue.
+            const reviewPlan: ReviewPlan = {
+              paymentMode: (trip?.paymentMode ?? 'default') as ReviewPaymentMode,
+            };
+            setFlowPhase('reviewing');
+            webRef.current?.injectJavaScript(buildReviewScript(reviewPlan));
+          }
+          return false; // still log it via pushEvent
+        case 'PAYMENT_REACHED':
+          setFlowPhase('done');
+          setFlowNotice(
+            'Reached IRCTC\u2019s payment step — complete the payment yourself on their page / your UPI app. The app never touches your money.',
+          );
+          return true;
+        case 'SEARCH_STEP_MISSING':
+        case 'REVIEW_STEP_MISSING':
+          setFlowPhase('idle');
+          setFlowNotice(
+            `The app couldn\u2019t find “${data.step ?? 'a step'}” on IRCTC\u2019s page — do that step by hand, then tap “🔎 Find train & continue” again to resume.`,
+          );
+          return true;
+        case 'POPUP_UNKNOWN':
+          setFlowPhase('idle');
+          setFlowNotice(
+            'IRCTC showed an unexpected popup — the app left it alone. Read it and answer it yourself, then tap “🔎 Find train & continue” again.',
+          );
+          return true;
+        case 'CAPTCHA_REQUIRED':
+        case 'OTP_REQUIRED':
+          if (phase === 'searching' || phase === 'reviewing' || phase === 'filling') {
+            setFlowPhase('idle');
+            if (type === 'CAPTCHA_REQUIRED') {
+              setFlowNotice(
+                'IRCTC is showing a CAPTCHA — solve it yourself, then tap “🔎 Find train & continue” again to resume.',
+              );
+            }
+            // OTP during filling still shows the OTP overlay via pushEvent
+            // (return false below); the flow just stops auto-chaining.
+            return type === 'CAPTCHA_REQUIRED';
+          }
+          return false;
+        default:
+          return false;
+      }
+    },
+    [buildPlan, trip],
+  );
+
   const onMessage = useCallback(
     (ev: WebViewMessageEvent) => {
       try {
@@ -217,6 +360,10 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
             (e.type === 'OTP_REQUIRED' && prebookActive.current)
           ) {
             handlePrebookEvent(e.type, (e.data ?? {}) as { step?: string });
+            return;
+          }
+          // Extended flow events (search → select → fill → review).
+          if (handleFlowEvent(e.type, (e.data ?? {}) as { step?: string })) {
             return;
           }
           pushEvent(e as FillEvent);
@@ -269,32 +416,6 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
     if (!ok) setBlockedUrl(url);
     return ok; // G9: only irctc.co.in loads in the WebView
   }, []);
-
-  const buildPlan = useCallback(async (): Promise<FillPlan | null> => {
-    if (!trip) return null;
-    const all = await loadPassengers();
-    const pax = trip.passengerIds
-      .map((id) => all.find((p) => p.id === id))
-      .filter((p): p is NonNullable<typeof p> => !!p);
-    if (pax.length === 0) return null;
-    return {
-      trainNo: trip.trainNo,
-      from: trip.from,
-      to: trip.to,
-      dateISO: trip.journeyDate,
-      classCode: trip.classCode,
-      quota: 'TATKAL',
-      autoUpgradation: true, // "Consider for auto upgradation" stays ticked
-      contactMobile: trip.contactMobile ?? '',
-      travelInsurance: trip.travelInsurance ?? true,
-      passengers: pax.map((p) => ({
-        name: p.name,
-        age: p.age,
-        gender: p.gender,
-        berthPref: p.berthPref,
-      })),
-    };
-  }, [trip]);
 
   // Explicit user tap ONLY — there is no timer, no auto-fire path.
   // First a probe checks the passenger-details page is actually open; if it
@@ -361,6 +482,31 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
     webRef.current?.injectJavaScript(buildPrebookScript(plan));
   }, [prebookState, trip]);
 
+  // Extended flow (user-authorized 2026-09-27): explicit user tap ONLY.
+  // Taps Search Trains, picks the trip's train/class/date, taps Book Now,
+  // taps Yes on IRCTC's station-mismatch confirmation, then auto-chains the
+  // fill engine and the review engine (Skip card, payment mode, Continue).
+  // Stops at the payment gateway — the user pays by hand. Every stage is
+  // idempotent, so re-tapping after a manual CAPTCHA/OTP resumes.
+  const onSearchFlowTap = useCallback(() => {
+    if (flowPhase === 'searching' || flowPhase === 'filling' || flowPhase === 'reviewing') return;
+    setFlowNotice(null);
+    if (!trip) return;
+    let plan: PostSearchPlan;
+    try {
+      plan = {
+        trainNo: trip.trainNo,
+        classCode: normalizeClassCode(trip.classCode),
+        dateISO: trip.journeyDate,
+        dateCard: toDateCard(trip.journeyDate),
+      };
+    } catch {
+      setFlowNotice('The trip\u2019s journey date looks wrong — check it on the trip setup screen.');
+      return;
+    }
+    webRef.current?.injectJavaScript(buildPostSearchScript(plan));
+  }, [flowPhase, trip]);
+
   // Hardware back: first step back inside the IRCTC page, otherwise let the
   // app-level handler pop the screen (App.tsx). Never exits from here.
   useEffect(() => {
@@ -401,8 +547,9 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
     setOtpRequired(false);
   }, [otpDigits]);
 
-  // (No confirm/book tap here — the user taps Continue / Book / Pay on
-  // IRCTC's page themselves. This file must never click IRCTC's buttons.)
+  // (Only the user-authorized flow above taps IRCTC's Search/Book/Continue
+  // buttons. This file never touches payment, CAPTCHA, or OTP — those are
+  // always the user's own hand.)
 
   const otpComplete = otpDigits.every((d) => d !== '');
 
@@ -467,14 +614,14 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
           login, fills your saved IRCTC login, and fills From / To / Date /
           Class / Quota on the search page. If IRCTC shows a CAPTCHA, you
           solve it by hand.
-          {'\n'}2. Review the search details, then tap Search Trains on
-          IRCTC's page yourself and pick your train.
-          {'\n'}3. On the passenger page, tap "⚡ Fill my form" — details
-          fill at human pace, then stop. Type the Aadhaar OTP yourself,
-          review every field, then tap IRCTC's own Continue button.
-          {'\n'}4. At payment, choose UPI → your UPI app (e.g. PhonePe):
-          the payment opens in YOUR app and you pay there — the copilot
-          hands the payment to you at that screen.
+          {'\n'}2. Tap "🔎 Find train & continue" — the app taps Search
+          Trains, picks your train / class / date, taps Book Now, answers
+          Yes on IRCTC's station-mismatch popup, fills the passenger form,
+          chooses the Skip card option and your payment mode, then taps
+          Continue. It stops at the payment step.
+          {'\n'}3. Pay by hand: complete the payment yourself on IRCTC's
+          page / your UPI app — the copilot never touches your money.
+          Type the Aadhaar OTP yourself whenever IRCTC asks.
         </Text>
 
         <TouchableOpacity
@@ -494,13 +641,38 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
         {prebookNotice && <Text style={styles.warn}>{prebookNotice}</Text>}
 
         <TouchableOpacity
-          style={[styles.fill, fillState !== 'idle' && styles.disabled]}
+          style={[
+            styles.fill,
+            styles.flowBtn,
+            (flowPhase === 'searching' || flowPhase === 'filling' || flowPhase === 'reviewing') &&
+              styles.disabled,
+          ]}
+          disabled={flowPhase === 'searching' || flowPhase === 'filling' || flowPhase === 'reviewing'}
+          onPress={onSearchFlowTap}
+        >
+          <Text style={styles.fillText}>
+            {flowPhase === 'searching'
+              ? '🔎 Finding your train… watch the page'
+              : flowPhase === 'filling'
+                ? 'Filling… watch the page'
+                : flowPhase === 'reviewing'
+                  ? 'Reviewing… watch the page'
+                  : flowPhase === 'done'
+                    ? '✓ At payment step — pay by hand now'
+                    : '🔎 Find train & continue'}
+          </Text>
+        </TouchableOpacity>
+
+        {flowNotice && <Text style={styles.warn}>{flowNotice}</Text>}
+
+        <TouchableOpacity
+          style={[styles.fill, styles.manualFill, fillState !== 'idle' && styles.disabled]}
           disabled={fillState !== 'idle'}
           onPress={onFillTap}
         >
-          <Text style={styles.fillText}>
+          <Text style={[styles.fillText, styles.manualFillText]}>
             {fillState === 'idle'
-              ? '⚡ Fill my form'
+              ? '⚡ Fill my form (manual)'
               : fillState === 'filling'
                 ? 'Filling… watch the page'
                 : '✓ Form filled'}
@@ -508,9 +680,9 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
         </TouchableOpacity>
 
         <Text style={styles.confirmNote}>
-          After the form fills, review every field on IRCTC's page yourself,
-          then tap IRCTC's own Continue button there — the app never taps
-          IRCTC's buttons for you.
+          The flow taps Search Trains, Book Now, the station-mismatch Yes,
+          and the review page's Continue for you — and stops at payment.
+          CAPTCHA, OTP and the actual payment are always your own hand.
         </Text>
         <Text style={styles.railOneNote}>
           Second lane: the official RailOne app books the same Tatkal quota
@@ -586,6 +758,9 @@ const styles = StyleSheet.create({
   fill: {
     backgroundColor: C.lime, borderRadius: 10, padding: 14, alignItems: 'center',
   },
+  flowBtn: { marginTop: 10 },
+  manualFill: { marginTop: 10, backgroundColor: C.card, borderColor: C.lime, borderWidth: 1 },
+  manualFillText: { color: C.lime },
   fillText: { color: C.bg, fontSize: 16, fontWeight: '800' },
   confirm: {
     borderColor: C.lime, borderWidth: 2, borderRadius: 10,

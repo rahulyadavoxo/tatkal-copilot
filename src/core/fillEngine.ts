@@ -3,11 +3,12 @@
  *
  * Builds a self-contained JS payload for injection into a WebView hosting
  * IRCTC's Tatkal passenger-details page. The payload fills passenger fields
- * at human pace, ticks the "Consider for auto upgradation" checkbox (the
- * user's stated preference), fills the contact mobile number and the travel
- * insurance choice, and then STOPS. It never submits anything and never
- * clicks any of IRCTC's navigation buttons (Continue/Book/Pay) — the user
- * always taps those themselves on IRCTC's page.
+ * at human pace, sets the "Consider for auto upgradation" checkbox only when
+ * the trip asks for it (otherwise IRCTC's default is left untouched), fills
+ * the contact mobile number and the travel insurance choice, and then STOPS.
+ * It never submits anything and never clicks any of IRCTC's navigation
+ * buttons (Continue/Book/Pay) — the user always taps those themselves on
+ * IRCTC's page.
  *
  * FIELD REPORT 2026-09-26: the first version located fields by DOM ids from
  * a hand-built mock (trainNo, pax0Name, …). IRCTC's real Angular page uses
@@ -50,9 +51,10 @@ export interface FillPlan {
   to: string;
   dateISO: string; // YYYY-MM-DD
   classCode: string; // '3A' | '2A' | 'SL' | ...
-  quota: 'TATKAL';
-  /** IRCTC "Consider for auto upgradation" checkbox — the fill ticks it
-   *  (the user's stated preference; IRCTC defaults it on anyway). */
+  quota: string; // IRCTC quota for this trip, e.g. 'TATKAL' (informational — the fill never changes it)
+  /** IRCTC "Consider for auto upgradation" checkbox — the fill ticks it only
+   *  when true; when false IRCTC's own default is left completely untouched
+   *  (never actively un-ticked). */
   autoUpgradation: boolean;
   /** Contact-details mobile number (IRCTC usually prefills it from the
    *  profile; the fill sets it only when the field is present and empty). */
@@ -81,6 +83,8 @@ export interface FieldLocator {
 
 export interface FieldAction {
   kind: 'input' | 'select' | 'checkbox' | 'radio' | 'addPassenger';
+  /** For checkbox: 'on' = ensure ticked, 'off' = ensure un-ticked,
+   *  'leave' = do not touch the control at all. */
   value: string;
   label: string;
   locator: FieldLocator;
@@ -249,10 +253,12 @@ export function buildFieldActions(plan: FillPlan): FieldAction[] {
       },
     );
   });
-  // Other-preference: auto-upgradation checkbox, ticked per the plan.
+  // Other-preference: auto-upgradation checkbox. 'on' ticks it (user asked
+  // for it); 'leave' leaves IRCTC's default exactly as it is — the script
+  // never un-ticks a box the user didn't ask about.
   actions.push({
     kind: 'checkbox',
-    value: plan.autoUpgradation ? 'on' : 'off',
+    value: plan.autoUpgradation ? 'on' : 'leave',
     label: 'auto-upgradation',
     locator: {
       id: 'autoUpgradation',
@@ -658,11 +664,14 @@ function runAction(a){
     };
     try {
       if (a.kind === 'checkbox') {
-        var want = (a.value !== 'off');
-        if (el.checked !== want) { try { el.click(); } catch (e) { el.checked = want; } }
-        else { el.checked = want; }
-        fire(el, 'input'); fire(el, 'change');
-        done(true);
+        if (a.value === 'leave') { done(true); } // user's choice: leave IRCTC's default alone
+        else {
+          var want = (a.value === 'on');
+          if (el.checked !== want) { try { el.click(); } catch (e) { el.checked = want; } }
+          else { el.checked = want; }
+          fire(el, 'input'); fire(el, 'change');
+          done(true);
+        }
       } else if (a.kind === 'select') {
         setSelect(el, a).then(done);
       } else if (a.kind === 'radio') {

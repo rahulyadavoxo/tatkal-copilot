@@ -33,9 +33,62 @@ import {
   clearIrctcCredentials,
   loadIrctcCredentials,
   loadPrefs,
+  loadTrips,
+  PAYMENT_MODE_LABELS,
   saveIrctcCredentials,
   savePrefs,
+  saveTrips,
+  type PaymentMode,
+  type Trip,
 } from '../vaultStore';
+
+function sampleTrip(overrides: Partial<Trip> = {}): Trip {
+  return {
+    id: 'trip-test-1',
+    trainNo: '12873',
+    from: 'DTO',
+    to: 'NDLS',
+    journeyDate: '2026-09-29',
+    classCode: '3A',
+    quota: 'TATKAL',
+    isAC: true,
+    passengerIds: [],
+    contactMobile: '9876543210',
+    travelInsurance: true,
+    autoUpgradation: false,
+    paymentMode: 'default',
+    createdAt: Date.now(),
+    ...overrides,
+  };
+}
+
+describe('trip preferences', () => {
+  it('round-trips autoUpgradation and paymentMode through the encrypted vault', async () => {
+    await saveTrips([sampleTrip({ autoUpgradation: true, paymentMode: 'bhim' })]);
+    const [loaded] = await loadTrips();
+    expect(loaded.autoUpgradation).toBe(true);
+    expect(loaded.paymentMode).toBe('bhim');
+  });
+
+  it('labels every payment mode', () => {
+    const modes: PaymentMode[] = ['default', 'cards', 'bhim'];
+    for (const m of modes) {
+      expect(typeof PAYMENT_MODE_LABELS[m]).toBe('string');
+      expect(PAYMENT_MODE_LABELS[m].length).toBeGreaterThan(0);
+    }
+  });
+
+  it('older trips without the new fields stay readable (safe defaults apply at use sites)', async () => {
+    const legacy = sampleTrip() as unknown as Record<string, unknown>;
+    delete legacy.autoUpgradation;
+    delete legacy.paymentMode;
+    await saveTrips([legacy as unknown as Trip]);
+    const [loaded] = await loadTrips();
+    // Use-site defaults: unticked auto-upgradation, IRCTC-default payment.
+    expect(loaded.autoUpgradation ?? false).toBe(false);
+    expect(loaded.paymentMode ?? 'default').toBe('default');
+  });
+});
 
 describe('IRCTC credentials', () => {
   it('round-trips through the encrypted vault', async () => {

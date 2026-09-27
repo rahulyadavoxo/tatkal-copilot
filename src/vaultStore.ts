@@ -44,8 +44,24 @@ export interface Trip {
   passengerIds: string[]; // refs into the passenger vault, max 4 (Tatkal PNR cap)
   contactMobile: string; // contact-details mobile, filled into IRCTC's form
   travelInsurance: boolean; // true = take travel insurance (IRCTC default)
+  /** "Consider for auto upgradation" — ticked only when the user selected it
+   *  in trip setup; otherwise the script leaves IRCTC's default untouched. */
+  autoUpgradation: boolean;
+  /** Payment-mode choice for the review page: 'default' leaves IRCTC's
+   *  selection alone; 'cards' picks the Cards/NetBanking/Wallets/UPI option;
+   *  'bhim' picks BHIM/UPI. The user always pays by hand afterwards. */
+  paymentMode: PaymentMode;
   createdAt: number;
 }
+
+/** Payment-mode preference saved on the trip (review-page radio). */
+export type PaymentMode = 'default' | 'cards' | 'bhim';
+
+export const PAYMENT_MODE_LABELS: Record<PaymentMode, string> = {
+  default: "IRCTC default (don't change)",
+  cards: 'Cards / NetBanking / Wallets / UPI',
+  bhim: 'BHIM / UPI',
+};
 
 /** A PNR the user wants to track after booking. */
 export interface TrackedPnr {

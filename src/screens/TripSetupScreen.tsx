@@ -25,11 +25,13 @@ import {
   isAcClass,
 } from '../core/tatkalConfig';
 import {
+  PAYMENT_MODE_LABELS,
   loadPassengers,
   loadTrips,
   newId,
   saveTrips,
   type Passenger,
+  type PaymentMode,
   type Trip,
 } from '../vaultStore';
 import type { Nav } from '../App';
@@ -55,6 +57,8 @@ export default function TripSetupScreen({
   const [selected, setSelected] = useState<string[]>([]);
   const [contactMobile, setContactMobile] = useState('');
   const [travelInsurance, setTravelInsurance] = useState(true);
+  const [autoUpgradation, setAutoUpgradation] = useState(false);
+  const [paymentMode, setPaymentMode] = useState<PaymentMode>('default');
   const [error, setError] = useState('');
   const prefilled = useRef(false);
 
@@ -76,6 +80,8 @@ export default function TripSetupScreen({
         setSelected(trip.passengerIds);
         setContactMobile(trip.contactMobile ?? '');
         setTravelInsurance(trip.travelInsurance ?? true);
+        setAutoUpgradation(trip.autoUpgradation ?? false);
+        setPaymentMode(trip.paymentMode ?? 'default');
         prefilled.current = true;
       }
     }
@@ -144,6 +150,8 @@ export default function TripSetupScreen({
       passengerIds: selected,
       contactMobile: mob,
       travelInsurance,
+      autoUpgradation,
+      paymentMode,
       createdAt: Date.now(),
     };
     const trips = await loadTrips();
@@ -235,6 +243,37 @@ export default function TripSetupScreen({
             onPress={() => setQuota(q)}
           >
             <Text style={[styles.chipText, quota === q && styles.chipTextOn]}>{q}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <Text style={styles.label}>Auto upgradation (IRCTC’s “Consider for auto upgradation”)</Text>
+      <View style={styles.chips}>
+        <TouchableOpacity
+          style={[styles.chip, autoUpgradation && styles.chipOn]}
+          onPress={() => setAutoUpgradation(true)}
+        >
+          <Text style={[styles.chipText, autoUpgradation && styles.chipTextOn]}>Yes, tick it</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.chip, !autoUpgradation && styles.chipOn]}
+          onPress={() => setAutoUpgradation(false)}
+        >
+          <Text style={[styles.chipText, !autoUpgradation && styles.chipTextOn]}>Leave IRCTC’s default</Text>
+        </TouchableOpacity>
+      </View>
+
+      <Text style={styles.label}>Payment mode (chosen on the review page, before you pay by hand)</Text>
+      <View style={styles.chips}>
+        {(Object.keys(PAYMENT_MODE_LABELS) as PaymentMode[]).map((m) => (
+          <TouchableOpacity
+            key={m}
+            style={[styles.chip, paymentMode === m && styles.chipOn]}
+            onPress={() => setPaymentMode(m)}
+          >
+            <Text style={[styles.chipText, paymentMode === m && styles.chipTextOn]}>
+              {PAYMENT_MODE_LABELS[m]}
+            </Text>
           </TouchableOpacity>
         ))}
       </View>

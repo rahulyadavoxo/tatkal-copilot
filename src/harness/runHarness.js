@@ -25,10 +25,24 @@ const REPO = path.resolve(__dirname, '..', '..');
 const MOCK = path.join(REPO, 'src', 'harness', 'mockIrctc.html');
 const MOCK_REAL = path.join(REPO, 'src', 'harness', 'mockIrctcReal.html');
 const MOCK_PREBOOK = path.join(REPO, 'src', 'harness', 'mockIrctcPrebook.html');
+const MOCK_BOOKING = path.join(REPO, 'src', 'harness', 'mockIrctcBooking.html');
 
 function fail(msg) {
   console.error('HARNESS_FAIL: ' + msg);
   process.exit(1);
+}
+
+// Syntax-gate: built injection scripts are assembled inside TS template
+// literals, where a stray backslash silently becomes a syntax error at
+// inject time (e.g. /bhim\/upi/ collapsing to /bhim/upi/). Catch it here.
+function checkScript(name, script) {
+  const f = path.join(os.tmpdir(), 'harness-script-' + name + '.js');
+  fs.writeFileSync(f, script);
+  try {
+    execFileSync('node', ['--check', f], { stdio: 'pipe' });
+  } catch (e) {
+    fail(name + ': built script has a syntax error: ' + (e.stderr || e.message));
+  }
 }
 
 // --- 1. Compile the TS engine to plain JS (single source of truth) --------
@@ -40,6 +54,8 @@ const TSC_CMD = fs.existsSync(LOCAL_TSC) ? process.execPath : 'npx';
 const TSC_ARGS = (fs.existsSync(LOCAL_TSC) ? [LOCAL_TSC] : ['tsc']).concat([
   'src/core/fillEngine.ts',
   'src/core/prebookEngine.ts',
+  'src/core/postSearchEngine.ts',
+  'src/core/reviewEngine.ts',
   'src/core/tatkalConfig.ts',
   '--outDir', DIST,
   '--rootDir', 'src/core',
@@ -56,6 +72,8 @@ try {
 }
 const engine = require(path.join(DIST, 'fillEngine.js'));
 const prebook = require(path.join(DIST, 'prebookEngine.js'));
+const postsearch = require(path.join(DIST, 'postSearchEngine.js'));
+const review = require(path.join(DIST, 'reviewEngine.js'));
 
 // --- 2. Playwright ----------------------------------------------------------
 let playwright;
@@ -376,6 +394,150 @@ async function waitForEvent(page, type, timeoutMs) {
       if (st.loggedIn) fail('PREBOOK_CAPTCHA: logged in despite the CAPTCHA');
       if (!st.modalOpen) fail('PREBOOK_CAPTCHA: login modal closed despite the CAPTCHA');
       console.log('PREBOOK_CAPTCHA_OK');
+      await page.close();
+    }
+    // ============ Phase G: post-search flow — search → train → popup Yes ====
+    {
+      const plan = {
+        trainNo: '12873',
+        classCode: '3A',
+        dateISO: '2026-09-29',
+        dateCard: postsearch.toDateCard('2026-09-29'),
+      };
+      const script = postsearch.buildPostSearchScript(plan, { seed: SEED });
+      checkScript('postsearch', script);
+      const violations = postsearch.scanPostSearchForViolations(script);
+      if (violations.length !== 0) {
+        fail('SEARCH: script violations: ' + violations.join('; '));
+      }
+      const page = await browser.newPage();
+      await page.goto('file://' + MOCK_BOOKING);
+      await page.addScriptTag({ content: script });
+      await waitForEvent(page, 'PASSENGER_PAGE_READY', 90000);
+      const log = await eventLog(page);
+      const types = log.map((e) => e.type);
+      for (const t of ['SEARCH_STARTED', 'POPUP_YES', 'PASSENGER_PAGE_READY']) {
+        if (!types.includes(t)) fail('SEARCH: missing event ' + t + ' (got ' + types.join(',') + ')');
+      }
+      if (types.includes('SEARCH_STEP_MISSING')) {
+        fail('SEARCH: missing steps: ' + log.filter((e) => e.type === 'SEARCH_STEP_MISSING').map((e) => e.data.step).join(','));
+      }
+      if (types.includes('POPUP_UNKNOWN') || types.includes('CAPTCHA_REQUIRED') || types.includes('OTP_REQUIRED')) {
+        fail('SEARCH: unexpected halt (got ' + types.join(',') + ')');
+      }
+      const st = await page.evaluate(() => ({
+        search: window.__searchClicked,
+        box: window.__boxClicked,
+        tab: window.__tabClicked,
+        date: window.__dateClicked,
+        bookTrain: window.__bookNowTrain,
+        yes: window.__yesClicked,
+        popupHidden: document.getElementById('confirmPopup').style.display === 'none',
+        paxShown: document.getElementById('paxPage').style.display !== 'none',
+        submits: window.__formSubmits,
+      }));
+      if (st.search !== 1) fail('SEARCH: Search Trains not clicked exactly once');
+      // Card starts collapsed (like the real page): a class box expands it,
+      // then the wanted tab is tapped. 12873 shows SL/3E boxes; 3A comes from the tab strip.
+      if (st.box !== 'SL') fail('SEARCH: class box not tapped to expand (got "' + st.box + '")');
+      if (st.tab !== '3A') fail('SEARCH: class tab wrong (got "' + st.tab + '")');
+      if (st.date !== 'Tue, 29 Sep') fail('SEARCH: date card wrong (got "' + st.date + '")');
+      if (st.bookTrain !== '12873') fail('SEARCH: Book Now hit the wrong train (' + st.bookTrain + ')');
+      if (st.yes !== 1) fail('SEARCH: popup Yes not clicked');
+      if (!st.popupHidden) fail('SEARCH: popup still open');
+      if (!st.paxShown) fail('SEARCH: passenger page not showing');
+      if (st.submits !== 0) fail('SEARCH: a form was submitted');
+      console.log('SEARCH_OK');
+      await page.close();
+    }
+
+    // ============ Phase G2: post-search without the popup ================
+    {
+      const plan = {
+        trainNo: '12873',
+        classCode: '3A',
+        dateISO: '2026-09-29',
+        dateCard: postsearch.toDateCard('2026-09-29'),
+      };
+      const page = await browser.newPage();
+      await page.goto('file://' + MOCK_BOOKING + '?nopopup=1');
+      const scriptG2 = postsearch.buildPostSearchScript(plan, { seed: SEED });
+      checkScript('postsearch-nopopup', scriptG2);
+      await page.addScriptTag({ content: scriptG2 });
+      await waitForEvent(page, 'PASSENGER_PAGE_READY', 90000);
+      const log = await eventLog(page);
+      const types = log.map((e) => e.type);
+      if (!types.includes('POPUP_NONE')) fail('SEARCH_NOPOPUP: POPUP_NONE not emitted');
+      if (types.includes('POPUP_YES') || types.includes('SEARCH_STEP_MISSING')) {
+        fail('SEARCH_NOPOPUP: unexpected events (got ' + types.join(',') + ')');
+      }
+      const paxShown = await page.evaluate(
+        () => document.getElementById('paxPage').style.display !== 'none',
+      );
+      if (!paxShown) fail('SEARCH_NOPOPUP: passenger page not showing');
+      console.log('SEARCH_NOPOPUP_OK');
+      await page.close();
+    }
+
+    // ============ Phase H: review — Skip, GST untouched, BHIM, Continue ===
+    {
+      const script = review.buildReviewScript({ paymentMode: 'bhim' }, { seed: SEED });
+      checkScript('review-bhim', script);
+      const violations = review.scanReviewForViolations(script);
+      if (violations.length !== 0) {
+        fail('REVIEW: script violations: ' + violations.join('; '));
+      }
+      const page = await browser.newPage();
+      await page.goto('file://' + MOCK_BOOKING + '?state=passenger');
+      await page.addScriptTag({ content: script });
+      await waitForEvent(page, 'PAYMENT_REACHED', 90000);
+      const log = await eventLog(page);
+      const types = log.map((e) => e.type);
+      if (types.includes('REVIEW_STEP_MISSING')) {
+        fail('REVIEW: missing steps: ' + log.filter((e) => e.type === 'REVIEW_STEP_MISSING').map((e) => e.data.step).join(','));
+      }
+      if (!types.includes('REVIEW_STARTED') || !types.includes('PAYMENT_REACHED')) {
+        fail('REVIEW: missing start/reached events (got ' + types.join(',') + ')');
+      }
+      const st = await page.evaluate(() => ({
+        skip: document.getElementById('skipRadio').checked,
+        gst: document.getElementById('gstin').value,
+        bhim: document.getElementById('payBhim').checked,
+        cards: document.getElementById('payCards').checked,
+        cont: window.__continueClicked,
+        gateway: document.getElementById('paymentGateway').style.display !== 'none',
+        submits: window.__formSubmits,
+      }));
+      if (!st.skip) fail('REVIEW: Skip card option not selected');
+      if (st.gst !== '') fail('REVIEW: GST field was touched');
+      if (!st.bhim) fail('REVIEW: BHIM/UPI payment option not selected');
+      if (st.cards) fail('REVIEW: cards payment option should have been deselected');
+      if (st.cont !== 1) fail('REVIEW: Continue not clicked exactly once');
+      if (!st.gateway) fail('REVIEW: did not reach the payment gateway marker');
+      if (st.submits !== 0) fail('REVIEW: a form was submitted');
+      console.log('REVIEW_OK');
+      await page.close();
+    }
+
+    // ============ Phase H2: review with IRCTC-default payment ============
+    {
+      const page = await browser.newPage();
+      await page.goto('file://' + MOCK_BOOKING + '?state=passenger');
+      const scriptH2 = review.buildReviewScript({ paymentMode: 'default' }, { seed: SEED });
+      checkScript('review-default', scriptH2);
+      await page.addScriptTag({ content: scriptH2 });
+      await waitForEvent(page, 'PAYMENT_REACHED', 90000);
+      const st = await page.evaluate(() => ({
+        skip: document.getElementById('skipRadio').checked,
+        bhim: document.getElementById('payBhim').checked,
+        cards: document.getElementById('payCards').checked,
+        cont: window.__continueClicked,
+      }));
+      if (!st.skip) fail('REVIEW_DEFAULT: Skip card option not selected');
+      if (!st.cards) fail('REVIEW_DEFAULT: IRCTC-default payment option was changed');
+      if (st.bhim) fail('REVIEW_DEFAULT: BHIM/UPI should not have been selected');
+      if (st.cont !== 1) fail('REVIEW_DEFAULT: Continue not clicked');
+      console.log('REVIEW_DEFAULT_OK');
       await page.close();
     }
   } finally {

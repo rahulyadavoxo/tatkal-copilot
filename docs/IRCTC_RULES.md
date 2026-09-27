@@ -168,7 +168,33 @@ no-auto-book invariant is the legal load-bearing wall — keep it.
    older) vs **22,676 since 2021** (TOI, mid-2026, newer). Use the newer
    figure with citation.
 
-## 7. Watch list (re-check before release)
+## 7. User-authorized interaction scope (2026-09-27, user's own account, own device)
+
+The user explicitly authorized the app to perform these interactions on
+IRCTC on their behalf, stopping at each named boundary:
+
+1. Tap **Search Trains** (from the app's own Start-booking button).
+2. Tap the saved train's **Book Now** for the saved class + journey date.
+3. Tap **Yes** ONLY on the known station-mismatch confirmation
+   ("Do you want to continue" — e.g. searched DTO→NDLS, booking DTO→ANVT).
+   Any other popup = halt for the user, no tap.
+4. Fill saved passengers (Add Passenger as needed) + saved contact mobile.
+5. GST left untouched unless the user supplies a GSTIN (optional field —
+   not yet implemented).
+6. Auto-upgradation checkbox ticked ONLY if the user opted in; otherwise
+   IRCTC's default is left as-is.
+7. Payment mode per the user's saved choice (IRCTC default / Cards… /
+   BHIM UPI), then tap **Continue** on the review page.
+8. **STOP at the payment gateway** — no further automation until the user
+   gives the next steps.
+
+Unchanged hard boundaries: never solve/bypass CAPTCHA, never auto-submit
+OTP, never enter payment details, never tap Pay, never bypass Akamai/WAF or
+spoof browser identity, halt for unknown popups, stop if IRCTC warns/blocks
+the account. The earlier stop-before-Search boundary is superseded only for
+the controls named above.
+
+## 8. Watch list (re-check before release)
 
 - Tatkal open times / days-before rule (IRCTC denied 2025 change rumours;
   check again).
