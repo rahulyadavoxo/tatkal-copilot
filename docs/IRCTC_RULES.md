@@ -185,14 +185,22 @@ IRCTC on their behalf, stopping at each named boundary:
    IRCTC's default is left as-is.
 7. Payment mode per the user's saved choice (IRCTC default / Cards… /
    BHIM UPI), then tap **Continue** on the review page.
-8. **STOP at the payment gateway** — no further automation until the user
-   gives the next steps.
+8. On IRCTC's **Review Journey** page, tap **Continue**.
+9. On IRCTC's **Payment Methods** page, select the user's saved method
+   (IRCTC default / IRCTC iPay / Multiple Payment Service / BHIM-UPI-USSD),
+   then tap **Continue**.
+10. On the provider list, select the user's saved provider (IRCTC default /
+    PayU / Paytm / PhonePe / Razorpay), then tap **Pay & Book**.
+11. **STOP at the payment gateway** — the user completes the payment by
+    hand. No further automation until the user gives the next steps.
 
 Unchanged hard boundaries: never solve/bypass CAPTCHA, never auto-submit
-OTP, never enter payment details, never tap Pay, never bypass Akamai/WAF or
-spoof browser identity, halt for unknown popups, stop if IRCTC warns/blocks
-the account. The earlier stop-before-Search boundary is superseded only for
-the controls named above.
+OTP, never enter payment details, never complete payment, never bypass
+Akamai/WAF or spoof browser identity, halt for unknown popups, stop if
+IRCTC warns/blocks the account. The earlier stop-before-Search and
+stop-at-review-Continue boundaries are superseded only for the controls
+named above. Tapping "Pay & Book" is authorized because it only opens the
+gateway — the actual payment is always manual.
 
 ## 8. Watch list (re-check before release)
 

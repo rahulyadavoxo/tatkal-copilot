@@ -25,13 +25,17 @@ import {
   isAcClass,
 } from '../core/tatkalConfig';
 import {
+  PAYMENT_METHOD_LABELS,
   PAYMENT_MODE_LABELS,
+  PAYMENT_PROVIDER_LABELS,
   loadPassengers,
   loadTrips,
   newId,
   saveTrips,
   type Passenger,
+  type PaymentMethod,
   type PaymentMode,
+  type PaymentProvider,
   type Trip,
 } from '../vaultStore';
 import type { Nav } from '../App';
@@ -59,6 +63,8 @@ export default function TripSetupScreen({
   const [travelInsurance, setTravelInsurance] = useState(true);
   const [autoUpgradation, setAutoUpgradation] = useState(false);
   const [paymentMode, setPaymentMode] = useState<PaymentMode>('default');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('default');
+  const [paymentProvider, setPaymentProvider] = useState<PaymentProvider>('default');
   const [error, setError] = useState('');
   const prefilled = useRef(false);
 
@@ -82,6 +88,8 @@ export default function TripSetupScreen({
         setTravelInsurance(trip.travelInsurance ?? true);
         setAutoUpgradation(trip.autoUpgradation ?? false);
         setPaymentMode(trip.paymentMode ?? 'default');
+        setPaymentMethod(trip.paymentMethod ?? 'default');
+        setPaymentProvider(trip.paymentProvider ?? 'default');
         prefilled.current = true;
       }
     }
@@ -152,6 +160,8 @@ export default function TripSetupScreen({
       travelInsurance,
       autoUpgradation,
       paymentMode,
+      paymentMethod,
+      paymentProvider,
       createdAt: Date.now(),
     };
     const trips = await loadTrips();
@@ -263,7 +273,7 @@ export default function TripSetupScreen({
         </TouchableOpacity>
       </View>
 
-      <Text style={styles.label}>Payment mode (chosen on the review page, before you pay by hand)</Text>
+      <Text style={styles.label}>Payment mode (booking page, before you pay by hand)</Text>
       <View style={styles.chips}>
         {(Object.keys(PAYMENT_MODE_LABELS) as PaymentMode[]).map((m) => (
           <TouchableOpacity
@@ -273,6 +283,36 @@ export default function TripSetupScreen({
           >
             <Text style={[styles.chipText, paymentMode === m && styles.chipTextOn]}>
               {PAYMENT_MODE_LABELS[m]}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <Text style={styles.label}>Payment method (IRCTC's Payment Methods page)</Text>
+      <View style={styles.chips}>
+        {(Object.keys(PAYMENT_METHOD_LABELS) as PaymentMethod[]).map((m) => (
+          <TouchableOpacity
+            key={m}
+            style={[styles.chip, paymentMethod === m && styles.chipOn]}
+            onPress={() => setPaymentMethod(m)}
+          >
+            <Text style={[styles.chipText, paymentMethod === m && styles.chipTextOn]}>
+              {PAYMENT_METHOD_LABELS[m]}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <Text style={styles.label}>Pay with (provider list, then you pay by hand)</Text>
+      <View style={styles.chips}>
+        {(Object.keys(PAYMENT_PROVIDER_LABELS) as PaymentProvider[]).map((m) => (
+          <TouchableOpacity
+            key={m}
+            style={[styles.chip, paymentProvider === m && styles.chipOn]}
+            onPress={() => setPaymentProvider(m)}
+          >
+            <Text style={[styles.chipText, paymentProvider === m && styles.chipTextOn]}>
+              {PAYMENT_PROVIDER_LABELS[m]}
             </Text>
           </TouchableOpacity>
         ))}

@@ -51,6 +51,13 @@ export interface Trip {
    *  selection alone; 'cards' picks the Cards/NetBanking/Wallets/UPI option;
    *  'bhim' picks BHIM/UPI. The user always pays by hand afterwards. */
   paymentMode: PaymentMode;
+  /** Payment-method choice for IRCTC's "Payment Methods" page (after the
+   *  Review Journey page): 'default' leaves IRCTC's selection alone. */
+  paymentMethod: PaymentMethod;
+  /** Payment-provider choice for the provider list (PayU / Paytm / PhonePe /
+   *  Razorpay): 'default' leaves IRCTC's selection alone, then the script
+   *  taps "Pay & Book" and STOPS — the user pays by hand on the gateway. */
+  paymentProvider: PaymentProvider;
   createdAt: number;
 }
 
@@ -61,6 +68,27 @@ export const PAYMENT_MODE_LABELS: Record<PaymentMode, string> = {
   default: "IRCTC default (don't change)",
   cards: 'Cards / NetBanking / Wallets / UPI',
   bhim: 'BHIM / UPI',
+};
+
+/** Payment-method preference saved on the trip (IRCTC "Payment Methods" page). */
+export type PaymentMethod = 'default' | 'ipay' | 'multiple' | 'bhimUssd';
+
+export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
+  default: "IRCTC default (don't change)",
+  ipay: 'IRCTC iPay (Card / Debit Card / UPI)',
+  multiple: 'Multiple Payment Service',
+  bhimUssd: 'BHIM / UPI / USSD',
+};
+
+/** Payment-provider preference saved on the trip (provider list page). */
+export type PaymentProvider = 'default' | 'payu' | 'paytm' | 'phonepe' | 'razorpay';
+
+export const PAYMENT_PROVIDER_LABELS: Record<PaymentProvider, string> = {
+  default: "IRCTC default (don't change)",
+  payu: 'PayU',
+  paytm: 'Paytm',
+  phonepe: 'PhonePe',
+  razorpay: 'Razorpay',
 };
 
 /** A PNR the user wants to track after booking. */

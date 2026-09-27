@@ -11,16 +11,16 @@
  *      the trip says 'default'; 'cards' selects the Cards/NetBanking/
  *      Wallets/UPI option; 'bhim' selects BHIM/UPI. The engine never enters
  *      any payment detail.
- *   4. continueTap — tap IRCTC's "Continue" button, emit PAYMENT_REACHED,
- *      and STOP. The payment gateway that opens afterwards is 100% manual:
- *      the user pays in their own UPI/bank app by hand.
+ *   4. continueTap — tap IRCTC's "Continue" button and emit REVIEW_DONE.
+ *      The payment engine (paymentEngine.ts) takes over from there: Review
+ *      Journey -> Payment Methods -> provider -> Pay & Book, then STOP.
  *
  * Safety invariants:
  * - Exactly one button is ever clicked: the visible "Continue". The script
  *   never references Book Now / Pay buttons, never submits a form, never
- *   touches the payment gateway, never solves CAPTCHA/OTP (both halt it).
+ *   solves CAPTCHA/OTP (both halt it).
  * - scanReviewForViolations asserts all of the above on the generated
- *   source, and the harness asserts the gateway page is never scripted.
+ *   source.
  */
 import { findSubmitPatterns } from './fillEngine';
 
@@ -37,7 +37,7 @@ export type ReviewEventType =
   | 'REVIEW_STARTED'
   | 'REVIEW_STEP'
   | 'REVIEW_STEP_MISSING'
-  | 'PAYMENT_REACHED'
+  | 'REVIEW_DONE'
   | 'CAPTCHA_REQUIRED'
   | 'OTP_REQUIRED';
 
@@ -59,7 +59,7 @@ export function scanReviewForViolations(source: string): string[] {
     .replace(/(^|[^:\n])\/\/[^\n]*/gm, '$1');
   const hits = findSubmitPatterns(code);
   const extra: Array<[string, RegExp]> = [
-    ['book-now reference', /book now/i],
+    ['book-now reference', /book[\s-]*now/i],
     ['pay button reference', /['"]pay['"]/i],
     ['payment-gateway interaction', /proceedToPayment|payNow|makePayment|razorpay|upi:/i],
     ['payment-detail entry', /cardNumber|\bcvv\b|cardPin|expiryDate/i],
@@ -226,7 +226,7 @@ async function stepContinue(){
   if (!btn) return stepMissing('continueTap');
   clickEl(btn);
   await sleep(1200);
-  post('PAYMENT_REACHED', {});
+  post('REVIEW_DONE', {});
   return true;
 }
 // ---------- main ----------

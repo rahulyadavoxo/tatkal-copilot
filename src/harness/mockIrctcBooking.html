@@ -17,6 +17,12 @@
   #stickyBar { position: sticky; bottom: 0; background: #fff; padding: 12px;
     border-top: 1px solid #999; display: flex; justify-content: space-between; }
   #stickyBar button { background: #f90; color: #fff; padding: 12px 32px; font-size: 16px; }
+  .sticky { position: sticky; bottom: 0; background: #fff; padding: 12px;
+    border-top: 1px solid #999; display: flex; justify-content: space-between; }
+  .sticky button { background: #f90; color: #fff; padding: 12px 32px; font-size: 16px; }
+  .pay-option { display: block; border: 1px solid #999; border-radius: 8px; padding: 10px; margin: 6px 0; }
+  .prov-option { border: 1px solid #999; border-radius: 8px; padding: 12px; margin: 6px 0; cursor: pointer; }
+  .prov-option.selected { border-color: #f90; border-width: 2px; }
   #paymentGateway { border: 3px dashed #090; padding: 24px; margin: 16px 0; font-weight: bold; }
   label { display: block; margin: 6px 0; }
 </style>
@@ -28,6 +34,11 @@
   window.__boxClicked = '';
   window.__yesClicked = 0;
   window.__continueClicked = 0;
+  window.__reviewContinueClicked = 0;
+  window.__payMethodSelected = '';
+  window.__payContinueClicked = 0;
+  window.__providerSelected = '';
+  window.__payBookClicked = 0;
   window.__tabClicked = '';
   window.__dateClicked = '';
   window.__bookNowTrain = '';
@@ -137,8 +148,44 @@
     <span>&#8377; 550 per person</span>
     <button id="continueBtn">Continue</button>
   </div>
-  <div id="paymentGateway" style="display:none">PAYMENT GATEWAY — everything from here is manual</div>
 </div>
+
+  <!-- state 4: Review Journey page -->
+  <div id="reviewJourneyPage" style="display:none">
+    <h2>Review Journey</h2>
+    <div>DALTONGANJ to ANAND VIHAR TERMINAL | Tue, 29 Sep</div>
+    <div><strong>SWARNJAYANTI EX (12873)</strong></div>
+    <div>19:02 DALTONGANJ — 13:10 ANAND VIHAR TERMINAL</div>
+    <div>1 Adult | Sleeper (SL) | General | Boarding at Daltonganj | Boarding Date: 29 Sep 2026 19:02</div>
+    <h3>Passenger Details</h3>
+    <div>1 Aryan choudhary — 20 yrs (08 Sep 2006) | Male | India | Side Lower</div>
+    <div>Your ticket will be sent to ra*****@gmail.com / 74*****41</div>
+    <div>View Cancellation Policy</div>
+    <div class="sticky"><span>&#8377; 561.8</span> <button id="reviewContinueBtn">Continue</button></div>
+  </div>
+
+  <!-- state 5: Payment Methods page -->
+  <div id="payMethodsPage" style="display:none">
+    <h2>Payment Methods</h2>
+    <div>Safe &amp; Secure Payments</div>
+    <label class="pay-option"><input type="radio" name="paymethod" value="ipay"> IRCTC iPay (Credit Card/Debit Card/UPI)</label>
+    <label class="pay-option"><input type="radio" name="paymethod" value="multiple" checked> Multiple Payment Service</label>
+    <label class="pay-option"><input type="radio" name="paymethod" value="bhim"> BHIM/ UPI/ USSD</label>
+    <button id="payBackBtn">Back</button>
+    <div class="sticky"><span>&#8377; 561.80</span> <button id="payContinueBtn">Continue</button></div>
+  </div>
+
+  <!-- state 6: provider list -->
+  <div id="providerPage" style="display:none">
+    <h2>Pay &amp; Book</h2>
+    <div class="prov-option" data-name="payu">PayU</div>
+    <div class="prov-option" data-name="paytm">Paytm</div>
+    <div class="prov-option" data-name="phonepe">PhonePe</div>
+    <div class="prov-option" data-name="razorpay">Razorpay</div>
+    <div class="sticky"><span>&#8377; 561.80</span> <button id="payBookBtn">Pay &amp; Book</button></div>
+  </div>
+
+  <div id="paymentGateway" style="display:none">PAYMENT GATEWAY — everything from here is manual</div>
 
 <script>
   document.getElementById('searchBtn').addEventListener('click', function () {
@@ -200,12 +247,43 @@
   });
   document.getElementById('continueBtn').addEventListener('click', function () {
     window.__continueClicked++;
+    document.getElementById('paxPage').style.display = 'none';
+    document.getElementById('reviewJourneyPage').style.display = 'block';
+  });
+  document.getElementById('reviewContinueBtn').addEventListener('click', function () {
+    window.__reviewContinueClicked++;
+    document.getElementById('reviewJourneyPage').style.display = 'none';
+    document.getElementById('payMethodsPage').style.display = 'block';
+  });
+  Array.from(document.querySelectorAll('input[name="paymethod"]')).forEach(function (r) {
+    r.addEventListener('change', function () { window.__payMethodSelected = r.value; });
+  });
+  document.getElementById('payContinueBtn').addEventListener('click', function () {
+    window.__payContinueClicked++;
+    document.getElementById('payMethodsPage').style.display = 'none';
+    document.getElementById('providerPage').style.display = 'block';
+  });
+  Array.from(document.querySelectorAll('.prov-option')).forEach(function (d) {
+    d.addEventListener('click', function () {
+      window.__providerSelected = d.getAttribute('data-name');
+      Array.from(document.querySelectorAll('.prov-option')).forEach(function (x) {
+        x.classList.remove('selected');
+      });
+      d.classList.add('selected');
+    });
+  });
+  document.getElementById('payBookBtn').addEventListener('click', function () {
+    window.__payBookClicked++;
     document.getElementById('paymentGateway').style.display = 'block';
   });
-  if (window.__startAtPax) {
+  var startState = qs.get('state');
+  if (startState === 'passenger' || startState === 'review' || startState === 'paymethods' || startState === 'providers') {
     document.getElementById('searchSection').style.display = 'none';
-    document.getElementById('paxPage').style.display = 'block';
   }
+  if (startState === 'passenger') document.getElementById('paxPage').style.display = 'block';
+  if (startState === 'review') document.getElementById('reviewJourneyPage').style.display = 'block';
+  if (startState === 'paymethods') document.getElementById('payMethodsPage').style.display = 'block';
+  if (startState === 'providers') document.getElementById('providerPage').style.display = 'block';
 </script>
 </body>
 </html>

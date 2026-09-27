@@ -33,12 +33,14 @@
  * account): after the pre-booking stage the user can tap "🔎 Find train &
  * continue", which runs the post-search engine (taps Search Trains, picks
  * the train/class/date, taps Book Now, taps Yes on IRCTC's station-mismatch
- * confirmation) and then auto-chains the fill engine and the review engine
+ * confirmation) and then auto-chains the fill engine, the review engine
  * (Skip card option, payment mode per the trip, taps the review page's
- * Continue). It STOPS at the payment gateway — the user pays by hand in
- * their own UPI/bank app. CAPTCHA/OTP always halt for manual work; the
- * engines never solve them, never enter payment details, never submit a
- * form (scanPostSearchForViolations / scanReviewForViolations assert this).
+ * Continue) and the payment engine (Review Journey Continue, payment
+ * method + provider per the trip, taps Pay & Book). It STOPS at the payment
+ * gateway — the user pays by hand in their own UPI/bank app. CAPTCHA/OTP
+ * always halt for manual work; the engines never solve them, never enter
+ * payment details, never submit a form (the engine safety scanners assert
+ * this).
  *
  * DEVICE-TEST ITEMS (not verifiable here): the engine's label-based locators
  * (placeholder / visible-label / attribute text) are validated against the
@@ -81,6 +83,12 @@ import {
   type PostSearchPlan,
 } from '../core/postSearchEngine';
 import { buildReviewScript, type ReviewPaymentMode, type ReviewPlan } from '../core/reviewEngine';
+import {
+  buildPaymentScript,
+  type PaymentMethodChoice,
+  type PaymentPlan,
+  type PaymentProviderChoice,
+} from '../core/paymentEngine';
 import {
   buildPrebookScript,
   toDMY,
@@ -148,7 +156,9 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
   // auto fill → review (Skip card, payment mode) → Continue. Stops at the
   // payment gateway; the user pays by hand. Every stage is idempotent, so
   // re-tapping after a manual CAPTCHA/OTP resumes where it stopped.
-  const [flowPhase, setFlowPhase] = useState<'idle' | 'searching' | 'filling' | 'reviewing' | 'done'>('idle');
+  const [flowPhase, setFlowPhase] = useState<
+  'idle' | 'searching' | 'filling' | 'reviewing' | 'paying' | 'done'
+>('idle');
   const [flowNotice, setFlowNotice] = useState<string | null>(null);
   const flowPhaseRef = useRef(flowPhase);
   flowPhaseRef.current = flowPhase;
@@ -291,14 +301,31 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
             webRef.current?.injectJavaScript(buildReviewScript(reviewPlan));
           }
           return false; // still log it via pushEvent
-        case 'PAYMENT_REACHED':
+        case 'REVIEW_DONE':
+          if (phase === 'reviewing') {
+            // Auto-chain: payment engine (Review Journey -> Payment Methods
+            // -> provider -> Pay & Book), then the user pays by hand.
+            const paymentPlan: PaymentPlan = {
+              paymentMethod: (trip?.paymentMethod ?? 'default') as PaymentMethodChoice,
+              paymentProvider: (trip?.paymentProvider ?? 'default') as PaymentProviderChoice,
+            };
+            setFlowPhase('paying');
+            webRef.current?.injectJavaScript(buildPaymentScript(paymentPlan));
+          }
+          return true;
+        case 'PAYMENT_STARTED':
+        case 'PAYMENT_STEP':
+          logIt(type);
+          return true;
+        case 'GATEWAY_REACHED':
           setFlowPhase('done');
           setFlowNotice(
-            'Reached IRCTC\u2019s payment step — complete the payment yourself on their page / your UPI app. The app never touches your money.',
+            'You\u2019re at the payment gateway — finish the payment yourself in your UPI / bank app. The app never touches your money.',
           );
           return true;
         case 'SEARCH_STEP_MISSING':
         case 'REVIEW_STEP_MISSING':
+        case 'PAYMENT_STEP_MISSING':
           setFlowPhase('idle');
           setFlowNotice(
             `The app couldn\u2019t find “${data.step ?? 'a step'}” on IRCTC\u2019s page — do that step by hand, then tap “🔎 Find train & continue” again to resume.`,
@@ -312,7 +339,7 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
           return true;
         case 'CAPTCHA_REQUIRED':
         case 'OTP_REQUIRED':
-          if (phase === 'searching' || phase === 'reviewing' || phase === 'filling') {
+          if (phase === 'searching' || phase === 'reviewing' || phase === 'filling' || phase === 'paying') {
             setFlowPhase('idle');
             if (type === 'CAPTCHA_REQUIRED') {
               setFlowNotice(
@@ -485,11 +512,13 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
   // Extended flow (user-authorized 2026-09-27): explicit user tap ONLY.
   // Taps Search Trains, picks the trip's train/class/date, taps Book Now,
   // taps Yes on IRCTC's station-mismatch confirmation, then auto-chains the
-  // fill engine and the review engine (Skip card, payment mode, Continue).
-  // Stops at the payment gateway — the user pays by hand. Every stage is
-  // idempotent, so re-tapping after a manual CAPTCHA/OTP resumes.
+  // fill engine, the review engine (Skip card, payment mode, Continue) and
+  // the payment engine (Review Journey -> Payment Methods -> provider ->
+  // Pay & Book). Stops at the payment gateway — the user pays by hand.
+  // Every stage is idempotent, so re-tapping after a manual CAPTCHA/OTP
+  // resumes.
   const onSearchFlowTap = useCallback(() => {
-    if (flowPhase === 'searching' || flowPhase === 'filling' || flowPhase === 'reviewing') return;
+    if (flowPhase === 'searching' || flowPhase === 'filling' || flowPhase === 'reviewing' || flowPhase === 'paying') return;
     setFlowNotice(null);
     if (!trip) return;
     let plan: PostSearchPlan;
@@ -617,9 +646,11 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
           {'\n'}2. Tap "🔎 Find train & continue" — the app taps Search
           Trains, picks your train / class / date, taps Book Now, answers
           Yes on IRCTC's station-mismatch popup, fills the passenger form,
-          chooses the Skip card option and your payment mode, then taps
-          Continue. It stops at the payment step.
-          {'\n'}3. Pay by hand: complete the payment yourself on IRCTC's
+          chooses the Skip card option and your payment mode, taps Continue,
+          then on the Review Journey page taps Continue again, picks your
+          payment method and provider, and taps Pay & Book. It stops at the
+          payment gateway.
+          {'\n'}3. Pay by hand: complete the payment yourself on the payment
           page / your UPI app — the copilot never touches your money.
           Type the Aadhaar OTP yourself whenever IRCTC asks.
         </Text>
@@ -644,10 +675,18 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
           style={[
             styles.fill,
             styles.flowBtn,
-            (flowPhase === 'searching' || flowPhase === 'filling' || flowPhase === 'reviewing') &&
+            (flowPhase === 'searching' ||
+              flowPhase === 'filling' ||
+              flowPhase === 'reviewing' ||
+              flowPhase === 'paying') &&
               styles.disabled,
           ]}
-          disabled={flowPhase === 'searching' || flowPhase === 'filling' || flowPhase === 'reviewing'}
+          disabled={
+            flowPhase === 'searching' ||
+            flowPhase === 'filling' ||
+            flowPhase === 'reviewing' ||
+            flowPhase === 'paying'
+          }
           onPress={onSearchFlowTap}
         >
           <Text style={styles.fillText}>
@@ -657,9 +696,11 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
                 ? 'Filling… watch the page'
                 : flowPhase === 'reviewing'
                   ? 'Reviewing… watch the page'
-                  : flowPhase === 'done'
-                    ? '✓ At payment step — pay by hand now'
-                    : '🔎 Find train & continue'}
+                  : flowPhase === 'paying'
+                    ? 'Choosing payment… watch the page'
+                    : flowPhase === 'done'
+                      ? '✓ At payment gateway — pay by hand now'
+                      : '🔎 Find train & continue'}
           </Text>
         </TouchableOpacity>
 

@@ -56,6 +56,7 @@ const TSC_ARGS = (fs.existsSync(LOCAL_TSC) ? [LOCAL_TSC] : ['tsc']).concat([
   'src/core/prebookEngine.ts',
   'src/core/postSearchEngine.ts',
   'src/core/reviewEngine.ts',
+  'src/core/paymentEngine.ts',
   'src/core/tatkalConfig.ts',
   '--outDir', DIST,
   '--rootDir', 'src/core',
@@ -74,6 +75,7 @@ const engine = require(path.join(DIST, 'fillEngine.js'));
 const prebook = require(path.join(DIST, 'prebookEngine.js'));
 const postsearch = require(path.join(DIST, 'postSearchEngine.js'));
 const review = require(path.join(DIST, 'reviewEngine.js'));
+const payment = require(path.join(DIST, 'paymentEngine.js'));
 
 // --- 2. Playwright ----------------------------------------------------------
 let playwright;
@@ -490,14 +492,14 @@ async function waitForEvent(page, type, timeoutMs) {
       const page = await browser.newPage();
       await page.goto('file://' + MOCK_BOOKING + '?state=passenger');
       await page.addScriptTag({ content: script });
-      await waitForEvent(page, 'PAYMENT_REACHED', 90000);
+      await waitForEvent(page, 'REVIEW_DONE', 90000);
       const log = await eventLog(page);
       const types = log.map((e) => e.type);
       if (types.includes('REVIEW_STEP_MISSING')) {
         fail('REVIEW: missing steps: ' + log.filter((e) => e.type === 'REVIEW_STEP_MISSING').map((e) => e.data.step).join(','));
       }
-      if (!types.includes('REVIEW_STARTED') || !types.includes('PAYMENT_REACHED')) {
-        fail('REVIEW: missing start/reached events (got ' + types.join(',') + ')');
+      if (!types.includes('REVIEW_STARTED') || !types.includes('REVIEW_DONE')) {
+        fail('REVIEW: missing start/done events (got ' + types.join(',') + ')');
       }
       const st = await page.evaluate(() => ({
         skip: document.getElementById('skipRadio').checked,
@@ -505,7 +507,8 @@ async function waitForEvent(page, type, timeoutMs) {
         bhim: document.getElementById('payBhim').checked,
         cards: document.getElementById('payCards').checked,
         cont: window.__continueClicked,
-        gateway: document.getElementById('paymentGateway').style.display !== 'none',
+        reviewJourney: window.getComputedStyle(document.getElementById('reviewJourneyPage')).display !== 'none',
+        gateway: window.getComputedStyle(document.getElementById('paymentGateway')).display !== 'none',
         submits: window.__formSubmits,
       }));
       if (!st.skip) fail('REVIEW: Skip card option not selected');
@@ -513,7 +516,8 @@ async function waitForEvent(page, type, timeoutMs) {
       if (!st.bhim) fail('REVIEW: BHIM/UPI payment option not selected');
       if (st.cards) fail('REVIEW: cards payment option should have been deselected');
       if (st.cont !== 1) fail('REVIEW: Continue not clicked exactly once');
-      if (!st.gateway) fail('REVIEW: did not reach the payment gateway marker');
+      if (!st.reviewJourney) fail('REVIEW: Review Journey page did not open after Continue');
+      if (st.gateway) fail('REVIEW: must not reach the gateway yet (payment engine does that)');
       if (st.submits !== 0) fail('REVIEW: a form was submitted');
       console.log('REVIEW_OK');
       await page.close();
@@ -526,7 +530,7 @@ async function waitForEvent(page, type, timeoutMs) {
       const scriptH2 = review.buildReviewScript({ paymentMode: 'default' }, { seed: SEED });
       checkScript('review-default', scriptH2);
       await page.addScriptTag({ content: scriptH2 });
-      await waitForEvent(page, 'PAYMENT_REACHED', 90000);
+      await waitForEvent(page, 'REVIEW_DONE', 90000);
       const st = await page.evaluate(() => ({
         skip: document.getElementById('skipRadio').checked,
         bhim: document.getElementById('payBhim').checked,
@@ -538,6 +542,79 @@ async function waitForEvent(page, type, timeoutMs) {
       if (st.bhim) fail('REVIEW_DEFAULT: BHIM/UPI should not have been selected');
       if (st.cont !== 1) fail('REVIEW_DEFAULT: Continue not clicked');
       console.log('REVIEW_DEFAULT_OK');
+      await page.close();
+    }
+
+    // ============ Phase I1: payment — Review Journey -> method -> provider -> Pay & Book
+    {
+      const plan = { paymentMethod: 'ipay', paymentProvider: 'phonepe' };
+      const script = payment.buildPaymentScript(plan, { seed: SEED });
+      checkScript('payment', script);
+      const violations = payment.scanPaymentForViolations(script);
+      if (violations.length !== 0) {
+        fail('PAYMENT: script violations: ' + violations.join('; '));
+      }
+      const page = await browser.newPage();
+      await page.goto('file://' + MOCK_BOOKING + '?state=review');
+      await page.addScriptTag({ content: script });
+      await waitForEvent(page, 'GATEWAY_REACHED', 90000);
+      const log = await eventLog(page);
+      const types = log.map((e) => e.type);
+      if (types.includes('PAYMENT_STEP_MISSING')) {
+        fail('PAYMENT: missing steps: ' + log.filter((e) => e.type === 'PAYMENT_STEP_MISSING').map((e) => e.data.step).join(','));
+      }
+      if (!types.includes('PAYMENT_STARTED') || !types.includes('GATEWAY_REACHED')) {
+        fail('PAYMENT: missing start/gateway events (got ' + types.join(',') + ')');
+      }
+      const st = await page.evaluate(() => ({
+        reviewCont: window.__reviewContinueClicked,
+        method: window.__payMethodSelected,
+        ipayChecked: Array.from(document.querySelectorAll('input[name="paymethod"]')).find((r) => r.value === 'ipay').checked,
+        payCont: window.__payContinueClicked,
+        provider: window.__providerSelected,
+        payBook: window.__payBookClicked,
+        gateway: window.getComputedStyle(document.getElementById('paymentGateway')).display !== 'none',
+        submits: window.__formSubmits,
+      }));
+      if (st.reviewCont !== 1) fail('PAYMENT: Review Journey Continue not clicked');
+      if (st.method !== 'ipay' || !st.ipayChecked) fail('PAYMENT: IRCTC iPay not selected');
+      if (st.payCont !== 1) fail('PAYMENT: Payment Methods Continue not clicked');
+      if (st.provider !== 'phonepe') fail('PAYMENT: PhonePe not selected (got "' + st.provider + '")');
+      if (st.payBook !== 1) fail('PAYMENT: Pay & Book not clicked exactly once');
+      if (!st.gateway) fail('PAYMENT: gateway marker not reached after Pay & Book');
+      if (st.submits !== 0) fail('PAYMENT: a form was submitted');
+      console.log('PAYMENT_OK');
+      await page.close();
+    }
+
+    // ============ Phase I2: payment with IRCTC defaults (nothing selected) =
+    {
+      const plan = { paymentMethod: 'default', paymentProvider: 'default' };
+      const script = payment.buildPaymentScript(plan, { seed: SEED });
+      checkScript('payment-default', script);
+      const violations = payment.scanPaymentForViolations(script);
+      if (violations.length !== 0) {
+        fail('PAYMENT_DEFAULT: script violations: ' + violations.join('; '));
+      }
+      const page = await browser.newPage();
+      await page.goto('file://' + MOCK_BOOKING + '?state=review');
+      await page.addScriptTag({ content: script });
+      await waitForEvent(page, 'GATEWAY_REACHED', 90000);
+      const st = await page.evaluate(() => ({
+        method: window.__payMethodSelected,
+        multipleChecked: Array.from(document.querySelectorAll('input[name="paymethod"]')).find((r) => r.value === 'multiple').checked,
+        provider: window.__providerSelected,
+        payBook: window.__payBookClicked,
+        gateway: window.getComputedStyle(document.getElementById('paymentGateway')).display !== 'none',
+        submits: window.__formSubmits,
+      }));
+      if (st.method !== '') fail('PAYMENT_DEFAULT: payment method was changed');
+      if (!st.multipleChecked) fail('PAYMENT_DEFAULT: IRCTC-default method was deselected');
+      if (st.provider !== '') fail('PAYMENT_DEFAULT: a provider was selected');
+      if (st.payBook !== 1) fail('PAYMENT_DEFAULT: Pay & Book not clicked');
+      if (!st.gateway) fail('PAYMENT_DEFAULT: gateway marker not reached');
+      if (st.submits !== 0) fail('PAYMENT_DEFAULT: a form was submitted');
+      console.log('PAYMENT_DEFAULT_OK');
       await page.close();
     }
   } finally {

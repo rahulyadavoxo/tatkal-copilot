@@ -57,6 +57,8 @@ function sampleTrip(overrides: Partial<Trip> = {}): Trip {
     travelInsurance: true,
     autoUpgradation: false,
     paymentMode: 'default',
+    paymentMethod: 'default',
+    paymentProvider: 'default',
     createdAt: Date.now(),
     ...overrides,
   };
@@ -68,6 +70,13 @@ describe('trip preferences', () => {
     const [loaded] = await loadTrips();
     expect(loaded.autoUpgradation).toBe(true);
     expect(loaded.paymentMode).toBe('bhim');
+  });
+
+  it('round-trips paymentMethod and paymentProvider through the encrypted vault', async () => {
+    await saveTrips([sampleTrip({ paymentMethod: 'multiple', paymentProvider: 'phonepe' })]);
+    const [loaded] = await loadTrips();
+    expect(loaded.paymentMethod).toBe('multiple');
+    expect(loaded.paymentProvider).toBe('phonepe');
   });
 
   it('labels every payment mode', () => {
