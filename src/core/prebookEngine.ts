@@ -725,6 +725,24 @@ function findDropdown(res){
   }
   return labelHits.length ? labelHits[0] : null;
 }
+var QUOTA_VALUE_TEXTS = ['general', 'ladies', 'lower berth/sr.citizen',
+  'person with disability', 'duty pass', 'tatkal', 'premium tatkal'];
+var CLASS_VALUE_TEXTS = ['all classes'];
+function findDropdownByValue(texts){
+  // The live quota control (2026-09-29) carries no "quota" in its attributes
+  // or nearby labels — find it by the value it currently displays instead.
+  var cands = document.querySelectorAll(
+    'select, mat-select, .p-dropdown, [role="combobox"], .ui-dropdown, ' +
+    'div[class*="dropdown"], button[class*="dropdown"]');
+  for (var i = 0; i < cands.length; i++) {
+    var el = cands[i];
+    if (!visible(el) || isOptionEl(el)) continue;
+    var cls = ' ' + norm(el.className || '') + ' ';
+    if (cls.indexOf('panel') >= 0) continue; // option panel, not the control
+    if (texts.indexOf(norm(dropdownCurrent(el))) >= 0) return el;
+  }
+  return null;
+}
 function fireChange(el){
   try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
   try { el.dispatchEvent(new Event('blur', { bubbles: true })); } catch (e) {}
@@ -782,6 +800,7 @@ async function stepDropdown(which){
   var res = which === 'class' ? [/class/] : [/quota/];
   var wanted = which === 'class' ? [PLAN.classCode, 'All Classes'] : [PLAN.quota];
   var el = findDropdown(res);
+  if (!el) el = findDropdownByValue(which === 'class' ? CLASS_VALUE_TEXTS : QUOTA_VALUE_TEXTS);
   if (!el) return stepMissing('dropdown', which + ':not-found');
   var cur = norm(dropdownCurrent(el));
   if (cur === norm(wanted[0])) return stepOk('dropdown', { which: which, skipped: true });
