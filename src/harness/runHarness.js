@@ -409,6 +409,33 @@ async function waitForEvent(page, type, timeoutMs) {
       await page.close();
     }
 
+    // ===== Phase E2b: alternate (non-PrimeNG) calendar — generic fallback ===
+    // Mirrors the 2026-09-29 on-device report: the live calendar's markup
+    // drifted from PrimeNG, so the day was never picked. The overlay here has
+    // no p-datepicker classes at all — the engine must find it via the
+    // library-agnostic fallback (month-year title + day grid).
+    {
+      const page = await browser.newPage();
+      await page.goto('file://' + MOCK_PREBOOK + '?altcal=1');
+      await page.addScriptTag({ content: prebook.buildPrebookScript(PREBOOK_PLAN, { seed: SEED }) });
+      await waitForEvent(page, 'PREBOOK_DONE', 90000);
+      const log = await eventLog(page);
+      const missing = log.filter((e) => e.type === 'PREBOOK_STEP_MISSING');
+      if (missing.length !== 0) {
+        fail('PREBOOK_ALTCAL: missing steps: ' + missing.map((e) => e.data.step + ':' + (e.data.detail || '')).join(', '));
+      }
+      const st = await page.evaluate(() => ({
+        date: document.getElementById('dateInput').value,
+        altClosed: document.querySelector('.alt-cal').style.display === 'none',
+        submits: window.__formSubmits,
+      }));
+      if (st.date !== '15/10/2026') fail('PREBOOK_ALTCAL: date wrong (got "' + st.date + '")');
+      if (!st.altClosed) fail('PREBOOK_ALTCAL: alt calendar overlay left open');
+      if (st.submits !== 0) fail('PREBOOK_ALTCAL: a form was submitted');
+      console.log('PREBOOK_ALTCAL_OK');
+      await page.close();
+    }
+
     // ============ Phase F: CAPTCHA on login halts — never bypassed =========
     {
       const page = await browser.newPage();

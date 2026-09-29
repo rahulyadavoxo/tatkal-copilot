@@ -475,31 +475,84 @@ function parseDMY(dmy){
   var m = /^(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4})$/.exec(dmy || '');
   return m ? { d: +m[1], m: +m[2], y: +m[3] } : null;
 }
-// The live IRCTC date field is a PrimeNG p-calendar: a readonly input whose
-// value can only be set by tapping it and picking a day in the overlay.
-// Typing into it never registers, and a left-open overlay blocks the
-// class/quota dropdowns — both caused the 2026-09-27 on-device stall.
-function datepickerOverlay(){
-  var dps = document.querySelectorAll('.p-datepicker');
-  for (var i = 0; i < dps.length; i++) {
-    if (visible(dps[i]) && dps[i].querySelector('.p-datepicker-calendar')) return dps[i];
-  }
-  return null;
-}
+// The live IRCTC date field is a readonly calendar widget: its value can only
+// be set by tapping it and picking a day in the overlay. Typing into it never
+// registers, and a left-open overlay blocks the class/quota dropdowns — both
+// caused the 2026-09-27 on-device stall. Detection is library-agnostic
+// (PrimeNG fast paths + generic fallbacks) because the live markup drifts.
 var CAL_MONTHS = ['january','february','march','april','may','june','july','august','september','october','november','december'];
-function overlayMonthYear(dp){
-  var ms = dp.querySelector('select.p-datepicker-month');
-  var ys = dp.querySelector('select.p-datepicker-year');
-  if (ms && ys) {
-    var y = parseInt(ys.value || (ys.options[ys.selectedIndex] && ys.options[ys.selectedIndex].text), 10);
-    if (ms.selectedIndex >= 0 && y) return { m: ms.selectedIndex + 1, y: y };
-  }
-  var title = dp.querySelector('.p-datepicker-title');
-  var t = norm((title && (title.innerText || title.textContent)) || '');
+function calMonthYearFromText(t){
   var m = null;
   for (var i = 0; i < CAL_MONTHS.length; i++) if (t.indexOf(CAL_MONTHS[i]) >= 0) m = i + 1;
   var ym = /(\\d{4})/.exec(t);
   return (m && ym) ? { m: m, y: +ym[1] } : null;
+}
+function findCalendarOverlay(){
+  var dps = document.querySelectorAll('.p-datepicker');
+  for (var i = 0; i < dps.length; i++) {
+    if (visible(dps[i]) && dps[i].querySelector('.p-datepicker-calendar, table')) return dps[i];
+  }
+  // Generic fallback: smallest visible panel holding a "Month YYYY" title and
+  // a grid of day numbers (covers non-PrimeNG calendar builds).
+  var best = null, bestArea = Infinity;
+  var els = document.querySelectorAll('div, section, aside');
+  for (var j = 0; j < els.length; j++) {
+    var el = els[j];
+    if (!visible(el)) continue;
+    var r = el.getBoundingClientRect();
+    if (r.width < 160 || r.height < 160) continue;
+    if (r.width > window.innerWidth * 0.97 && r.height > window.innerHeight * 0.9) continue;
+    var t = norm(el.innerText || '');
+    if (!calMonthYearFromText(t)) continue;
+    var dayCount = 0;
+    var toks = t.replace(/[^0-9]+/g, ' ').trim().split(' ');
+    for (var k = 0; k < toks.length; k++) {
+      var nv = +toks[k];
+      if (nv >= 1 && nv <= 31) dayCount++;
+    }
+    if (dayCount < 28) continue;
+    var area = r.width * r.height;
+    if (area < bestArea) { best = el; bestArea = area; }
+  }
+  return best;
+}
+function overlayMonthYear(root){
+  var ms = root.querySelector('select.p-datepicker-month, select[data-month]');
+  var ys = root.querySelector('select.p-datepicker-year, select[data-year]');
+  if (ms && ys) {
+    var yv = ys.value || (ys.options[ys.selectedIndex] && ys.options[ys.selectedIndex].text);
+    var y = parseInt(yv, 10);
+    if (ms.selectedIndex >= 0 && y) return { m: ms.selectedIndex + 1, y: y };
+  }
+  var title = root.querySelector('.p-datepicker-title, [class*="calendar-title"], [class*="datepicker-title"]');
+  var t = norm((title && (title.innerText || title.textContent)) || '');
+  var my = t ? calMonthYearFromText(t) : null;
+  if (my) return my;
+  // generic: first short "Month YYYY" text among descendants
+  var els = root.querySelectorAll('div, span, button, caption, h1, h2, h3, h4');
+  for (var i = 0; i < els.length; i++) {
+    var et = norm(els[i].innerText || els[i].textContent || '');
+    if (!et || et.length > 40) continue;
+    var g = calMonthYearFromText(et);
+    if (g) return g;
+  }
+  return null;
+}
+function calNavButton(root, prev){
+  var b = root.querySelector(prev ? '.p-datepicker-prev' : '.p-datepicker-next');
+  if (b && visible(b)) return b;
+  var btns = root.querySelectorAll('button, [role="button"], a');
+  for (var i = 0; i < btns.length; i++) {
+    var el = btns[i];
+    if (!visible(el)) continue;
+    var lab = norm(el.getAttribute('aria-label') || '');
+    var txt = norm(el.innerText || el.textContent || '').trim();
+    var isPrev = lab.indexOf('prev') >= 0 || txt === '‹' || txt === '<' || txt === '«';
+    var isNext = lab.indexOf('next') >= 0 || txt === '›' || txt === '>' || txt === '»';
+    if (prev && isPrev && !isNext) return el;
+    if (!prev && isNext && !isPrev) return el;
+  }
+  return null;
 }
 function dismissCalendar(){
   try {
@@ -513,46 +566,70 @@ function calDayText(el){
 function calDisabled(el){
   if (!el) return false;
   var cls = ' ' + (el.className || '') + ' ';
-  if (cls.indexOf('p-disabled') >= 0) return true;
-  try { if (el.getAttribute('aria-disabled') === 'true') return true; } catch (e) {}
+  if (cls.indexOf('p-disabled') >= 0 || cls.indexOf('disabled') >= 0) return true;
+  try {
+    if (el.getAttribute('aria-disabled') === 'true') return true;
+    if (el.hasAttribute('disabled')) return true;
+  } catch (e) {}
   return false;
+}
+function findDayCell(root, dayNum){
+  var want = String(dayNum);
+  // fast path: PrimeNG-style table cells (tolerates padded day text and
+  // span-level disabled, as seen on the live page 2026-09-27)
+  var cells = root.querySelectorAll('.p-datepicker-calendar td, table td');
+  for (var c = 0; c < cells.length; c++) {
+    var td = cells[c];
+    var tcls = ' ' + (td.className || '') + ' ';
+    if (tcls.indexOf('other-month') >= 0) continue;
+    var inner = td.querySelector('span, a, button') || td;
+    if (calDisabled(td) || calDisabled(inner)) continue;
+    if (calDayText(inner) === want) return inner;
+  }
+  // generic: smallest visible leaf whose whole text is the day number
+  var best = null, bestArea = Infinity;
+  var els = root.querySelectorAll('button, a, span, td, div');
+  for (var i = 0; i < els.length; i++) {
+    var el = els[i];
+    if (!visible(el)) continue;
+    if (calDisabled(el)) continue;
+    if (calDayText(el) !== want) continue;
+    var r = el.getBoundingClientRect();
+    var area = r.width * r.height;
+    if (area > 0 && area < bestArea) { best = el; bestArea = area; }
+  }
+  return best;
 }
 // Returns true on success, otherwise a short reason code for diagnostics.
 async function pickDateFromCalendar(input, target){
-  clickEl(input);
   var dp = null;
-  for (var w = 0; w < 20 && !dp; w++) { await sleep(250); dp = datepickerOverlay(); }
+  for (var tap = 0; tap < 3 && !dp; tap++) {
+    clickEl(input);
+    for (var w = 0; w < 20 && !dp; w++) { await sleep(250); dp = findCalendarOverlay(); }
+    if (!dp) await sleep(500);
+  }
   if (!dp) return 'no-overlay';
   for (var n = 0; n < 30; n++) {
     var shown = overlayMonthYear(dp);
     if (!shown) return 'no-title';
     if (shown.m === target.m && shown.y === target.y) break;
     var goPrev = (shown.y > target.y) || (shown.y === target.y && shown.m > target.m);
-    var btn = dp.querySelector(goPrev ? '.p-datepicker-prev' : '.p-datepicker-next');
-    if (!btn || !visible(btn)) return 'no-nav';
+    var btn = calNavButton(dp, goPrev);
+    if (!btn) return 'no-nav';
     clickEl(btn);
     await sleep(450);
-    dp = datepickerOverlay() || dp;
+    dp = findCalendarOverlay() || dp;
   }
   var fin = overlayMonthYear(dp);
   if (!fin || fin.m !== target.m || fin.y !== target.y) return 'no-nav';
-  // Live PrimeNG cells carry whitespace around the day number and put the
-  // disabled state on the inner span — match tolerantly (2026-09-27 fix).
-  var cells = dp.querySelectorAll('.p-datepicker-calendar td');
-  var hit = null, hitTd = null;
-  for (var c = 0; c < cells.length; c++) {
-    var td = cells[c];
-    var tcls = ' ' + (td.className || '') + ' ';
-    if (tcls.indexOf('other-month') >= 0) continue;
-    var inner = td.querySelector('span, a') || td;
-    if (calDisabled(td) || calDisabled(inner)) continue;
-    if (calDayText(inner) === String(target.d)) { hit = inner; hitTd = td; break; }
-  }
+  var hit = findDayCell(dp, target.d);
   if (!hit) return 'no-day';
   clickEl(hit);
   await sleep(600);
-  if (!dateInputValueMatches(input, PLAN.dateDMY) && hitTd && hitTd !== hit) {
-    clickEl(hitTd); // some builds listen on the cell itself
+  var cellParent = null;
+  try { cellParent = hit.parentElement; } catch (e) {}
+  if (!dateInputValueMatches(input, PLAN.dateDMY) && cellParent && cellParent !== hit) {
+    clickEl(cellParent); // some builds listen on the cell itself
     await sleep(600);
   }
   dismissCalendar();
@@ -576,7 +653,7 @@ async function stepDate(){
     if (picked !== true || !dateInputValueMatches(input, PLAN.dateDMY))
       return stepMissing('date', typeof picked === 'string' ? picked : 'no-verify');
   }
-  if (datepickerOverlay()) { dismissCalendar(); await sleep(300); }
+  if (findCalendarOverlay()) { dismissCalendar(); await sleep(300); }
   return stepOk('date');
 }
 function findDropdown(res){

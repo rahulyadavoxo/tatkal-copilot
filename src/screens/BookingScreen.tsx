@@ -178,7 +178,7 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
 
   // Pre-booking event routing. The engine never taps Search Trains /
   // Continue / Book — it stops at PREBOOK_DONE and the user takes over.
-  const handlePrebookEvent = useCallback((type: string, data: { step?: string }) => {
+  const handlePrebookEvent = useCallback((type: string, data: { step?: string; detail?: string }) => {
     switch (type) {
       case 'PREBOOK_STARTED':
         setPrebookState('running');
@@ -217,15 +217,27 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
           'IRCTC wants an OTP for this login — type it on their page yourself, then tap “🚀 Start booking” again.',
         );
         break;
-      case 'PREBOOK_STEP_MISSING':
+      case 'PREBOOK_STEP_MISSING': {
         prebookActive.current = false;
         setPrebookState('idle');
+        const dateWhy: Record<string, string> = {
+          'no-overlay': 'the calendar never opened',
+          'no-title': 'the calendar month could not be read',
+          'no-nav': 'the calendar would not turn to your travel month',
+          'no-day': 'your date was not tappable in the shown month',
+          'no-verify': 'the date did not stick after tapping it',
+        };
+        const why =
+          data.step === 'date' && data.detail
+            ? ` (${dateWhy[data.detail] ?? 'something unexpected happened'})`
+            : '';
         setPrebookNotice(
           data.step === 'date'
-            ? 'The app couldn\u2019t tap your travel date in IRCTC\u2019s calendar — pick the date by hand, then tap “🚀 Start booking” again to continue.'
+            ? `The app couldn\u2019t tap your travel date in IRCTC\u2019s calendar${why} — pick the date by hand, then tap “🚀 Start booking” again to continue.`
             : `The app couldn\u2019t find “${data.step ?? 'a step'}” on IRCTC\u2019s page — it may have changed. Do that step by hand, then tap “🚀 Start booking” again to continue.`,
         );
         break;
+      }
     }
   }, []);
 
@@ -259,7 +271,7 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
   // when the event is fully consumed here; false lets it fall through to
   // the fill-event log (pushEvent).
   const handleFlowEvent = useCallback(
-    (type: string, data: { step?: string }) => {
+    (type: string, data: { step?: string; detail?: string }) => {
       const phase = flowPhaseRef.current;
       const logIt = (t: string) =>
         setEvents((prev) => [
@@ -388,11 +400,11 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
             e.type === 'PREBOOK_DONE' ||
             (e.type === 'OTP_REQUIRED' && prebookActive.current)
           ) {
-            handlePrebookEvent(e.type, (e.data ?? {}) as { step?: string });
+            handlePrebookEvent(e.type, (e.data ?? {}) as { step?: string; detail?: string });
             return;
           }
           // Extended flow events (search → select → fill → review).
-          if (handleFlowEvent(e.type, (e.data ?? {}) as { step?: string })) {
+          if (handleFlowEvent(e.type, (e.data ?? {}) as { step?: string; detail?: string })) {
             return;
           }
           pushEvent(e as FillEvent);

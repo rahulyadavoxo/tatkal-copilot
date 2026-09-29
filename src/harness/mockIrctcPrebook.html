@@ -151,6 +151,7 @@ if (qs.get('realotp') === '1') {
 
 // ---- PrimeNG-style date picker (mirrors live IRCTC p-calendar) ----
 (function(){
+  if (qs.get('altcal') === '1') return; // alt variant below takes over
   var NAMES = ['January','February','March','April','May','June','July',
                'August','September','October','November','December'];
   var viewM = 9, viewY = 2026; // opens on September 2026
@@ -171,7 +172,7 @@ if (qs.get('realotp') === '1') {
       if (viewY === 2026 && viewM === 9 && d < 27) sp.className = 'p-disabled';
       (function(day){
         sp.addEventListener('click', function(){
-          if (td.className.indexOf('p-disabled') >= 0) return;
+          if (sp.className.indexOf('p-disabled') >= 0) return;
           dateInput.value = ('0' + day).slice(-2) + '/' + ('0' + viewM).slice(-2) + '/' + viewY;
           dp.style.display = 'none';
         });
@@ -191,6 +192,60 @@ if (qs.get('realotp') === '1') {
   });
   document.addEventListener('keydown', function(e){
     if (e.key === 'Escape') dp.style.display = 'none';
+  });
+})();
+
+// ---- Alternate generic calendar (?altcal=1): no PrimeNG classes at all ----
+// Exercises the engine's library-agnostic fallback paths.
+(function(){
+  if (qs.get('altcal') !== '1') return;
+  var NAMES = ['January','February','March','April','May','June','July',
+               'August','September','October','November','December'];
+  var viewM = 9, viewY = 2026;
+  var dateInput = document.getElementById('dateInput');
+  var alt = document.createElement('div');
+  alt.className = 'alt-cal';
+  alt.style.cssText = 'display:none;position:absolute;top:120px;left:20px;z-index:50;background:#fff;border:1px solid #999;padding:10px;width:340px;';
+  alt.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:center">' +
+    '<button type="button" class="alt-prev" aria-label="Previous month">&#8249;</button>' +
+    '<div class="alt-cal-title"></div>' +
+    '<button type="button" class="alt-next" aria-label="Next month">&#8250;</button>' +
+    '</div><div class="alt-grid" style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-top:8px"></div>';
+  document.body.appendChild(alt);
+  function render(){
+    alt.querySelector('.alt-cal-title').textContent = NAMES[viewM - 1] + ' ' + viewY;
+    var grid = alt.querySelector('.alt-grid');
+    grid.innerHTML = '';
+    var dim = new Date(viewY, viewM, 0).getDate();
+    for (var d = 1; d <= dim; d++) {
+      (function(day){
+        var b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'alt-day';
+        b.textContent = ' ' + day + ' ';
+        if (viewY === 2026 && viewM === 9 && day < 27) {
+          b.setAttribute('disabled', '');
+          b.setAttribute('aria-disabled', 'true');
+        }
+        b.addEventListener('click', function(){
+          if (b.hasAttribute('disabled')) return;
+          dateInput.value = ('0' + day).slice(-2) + '/' + ('0' + viewM).slice(-2) + '/' + viewY;
+          alt.style.display = 'none';
+        });
+        grid.appendChild(b);
+      })(d);
+    }
+  }
+  dateInput.addEventListener('click', function(){ render(); alt.style.display = 'block'; });
+  alt.querySelector('.alt-prev').addEventListener('click', function(){
+    viewM--; if (viewM < 1) { viewM = 12; viewY--; } render();
+  });
+  alt.querySelector('.alt-next').addEventListener('click', function(){
+    viewM++; if (viewM > 12) { viewM = 1; viewY++; } render();
+  });
+  document.addEventListener('keydown', function(e){
+    if (e.key === 'Escape') alt.style.display = 'none';
   });
 })();
 
