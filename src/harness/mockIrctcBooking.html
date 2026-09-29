@@ -66,6 +66,15 @@
       b.replaceWith(inp);
     }
   </script>
+  <script>
+    if (new URLSearchParams(location.search).get('divsearch') === '1') {
+      var b = document.getElementById('searchBtn');
+      var d = document.createElement('div');
+      d.id = 'searchBtn'; d.className = 'search-div'; d.textContent = 'Search Trains';
+      d.style.cssText = 'background:#f90;color:#fff;padding:12px;text-align:center;';
+      b.replaceWith(d);
+    }
+  </script>
 </div>
 
 <!-- state 2: train list — cards start COLLAPSED like the real IRCTC page -->

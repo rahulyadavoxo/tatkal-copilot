@@ -226,29 +226,60 @@ function isOptionEl(el){
   if (cls.indexOf('p-dropdown-item') >= 0 || cls.indexOf('ui-dropdown-item') >= 0) return true;
   return (el.getAttribute('role') || '') === 'option';
 }
+function flatText(el){
+  var tag = (el.tagName || '').toLowerCase();
+  var raw = tag === 'input' ? (el.getAttribute('value') || '')
+                            : (el.innerText || el.textContent || '');
+  return norm(raw).replace(/\\s+/g, ' ').trim();
+}
+function dumpSearchCandidates(){
+  // Compact dump of the page's clickable controls, shown in the missing-step
+  // notice so an on-device failure can be diagnosed from the message alone.
+  var out = [];
+  var els = document.querySelectorAll(
+    'button, input[type="submit"], input[type="button"], a, [role="button"], div, span');
+  for (var i = 0; i < els.length && out.length < 12; i++) {
+    var el = els[i], tag = (el.tagName || '').toLowerCase();
+    if (tag !== 'button' && tag !== 'a' && tag !== 'input' &&
+        el.getAttribute('role') !== 'button') continue; // div/span only help the dump
+    if (!visible(el) || isOptionEl(el)) continue;
+    var t = flatText(el).slice(0, 36);
+    if (!t) continue;
+    out.push(tag + (el.disabled ? '[disabled]' : '') + ':"' + t + '"');
+  }
+  return out.length ? out.join(' | ') : '(no clickable controls found)';
+}
 function findSearchButton(){
   // The live search control is not always a <button> reading exactly
-  // "Search Trains" (seen on-device 2026-09-29: exact match found nothing).
-  var cands = document.querySelectorAll('button, input[type="submit"], input[type="button"], a');
+  // "Search Trains" (seen on-device 2026-09-29: exact match found nothing,
+  // fuzzy button/input/a match still found nothing).
+  var cands = document.querySelectorAll(
+    'button, input[type="submit"], input[type="button"], a, [role="button"]');
   var fallback = null;
   for (var i = 0; i < cands.length; i++) {
     var el = cands[i];
     if (!visible(el) || isOptionEl(el)) continue;
-    var tag = (el.tagName || '').toLowerCase();
-    var t = tag === 'input'
-      ? norm(el.getAttribute('value') || '')
-      : norm(el.innerText || el.textContent || '');
+    var t = flatText(el);
     if (!t) continue;
     if (t === 'search trains') return el;
     if (t.indexOf('search') >= 0 && t.indexOf('train') >= 0) return el;
     if (t.indexOf('search') >= 0 && !fallback) fallback = el;
   }
-  return fallback;
+  if (fallback) return fallback;
+  // Last resort: a div/span whose whole text is exactly "Search Trains" —
+  // some IRCTC renders style a plain element as the search control.
+  var els = document.querySelectorAll('div, span');
+  for (var j = 0; j < els.length; j++) {
+    if (!visible(els[j]) || isOptionEl(els[j])) continue;
+    if (flatText(els[j]) === 'search trains') return els[j];
+  }
+  return null;
 }
 async function stepTapSearch(){
   if (trainListVisible()) return stepOk('tapSearch', { skipped: true, reason: 'list-already-showing' });
   var btn = findSearchButton();
-  if (!btn) return stepMissing('tapSearch', 'Search Trains button not found');
+  if (!btn) return stepMissing('tapSearch',
+    'Search Trains control not found. On the page now: ' + dumpSearchCandidates());
   clickEl(btn);
   await sleep(2500);
   if (!trainListVisible()) { strongClick(btn); await sleep(2500); }

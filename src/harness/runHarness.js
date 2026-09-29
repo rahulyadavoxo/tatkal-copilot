@@ -688,6 +688,38 @@ async function waitForEvent(page, type, timeoutMs) {
       await page.close();
     }
 
+    // ============ Phase G4: Search rendered as a plain div =================
+    {
+      const plan = {
+        trainNo: '12873',
+        classCode: '3A',
+        dateISO: '2026-09-29',
+        dateCard: postsearch.toDateCard('2026-09-29'),
+      };
+      const page = await browser.newPage();
+      await page.goto('file://' + MOCK_BOOKING + '?divsearch=1');
+      const script = postsearch.buildPostSearchScript(plan, { seed: SEED });
+      checkScript('postsearch-divsearch', script);
+      await page.addScriptTag({ content: script });
+      await waitForEvent(page, 'PASSENGER_PAGE_READY', 90000);
+      const log = await eventLog(page);
+      if (log.map((e) => e.type).includes('SEARCH_STEP_MISSING')) {
+        fail('SEARCH_DIVSEARCH: missing steps: ' + log.filter((e) => e.type === 'SEARCH_STEP_MISSING').map((e) => e.data.step + ':' + (e.data.detail || '')).join(','));
+      }
+      const st = await page.evaluate(() => ({
+        search: window.__searchClicked,
+        bookTrain: window.__bookNowTrain,
+        paxShown: document.getElementById('paxPage').style.display !== 'none',
+        submits: window.__formSubmits,
+      }));
+      if (st.search !== 1) fail('SEARCH_DIVSEARCH: Search div not clicked exactly once');
+      if (st.bookTrain !== '12873') fail('SEARCH_DIVSEARCH: wrong train (' + st.bookTrain + ')');
+      if (!st.paxShown) fail('SEARCH_DIVSEARCH: passenger page not showing');
+      if (st.submits !== 0) fail('SEARCH_DIVSEARCH: a form was submitted');
+      console.log('SEARCH_DIVSEARCH_OK');
+      await page.close();
+    }
+
     // ============ Phase G2: post-search without the popup ================
     {
       const plan = {
