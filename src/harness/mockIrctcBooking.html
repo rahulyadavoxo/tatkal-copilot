@@ -58,6 +58,14 @@
   <input id="toInput" placeholder="To" value="NDLS - NEW DELHI">
   <input id="dateInput" value="29/09/2026">
   <button id="searchBtn">Search Trains</button>
+  <script>
+    if (new URLSearchParams(location.search).get('inputbtn') === '1') {
+      var b = document.getElementById('searchBtn');
+      var inp = document.createElement('input');
+      inp.type = 'submit'; inp.id = 'searchBtn'; inp.value = 'Search Trains';
+      b.replaceWith(inp);
+    }
+  </script>
 </div>
 
 <!-- state 2: train list — cards start COLLAPSED like the real IRCTC page -->

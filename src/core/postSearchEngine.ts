@@ -140,6 +140,18 @@ function clickEl(el){
   try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
   el.click();
 }
+function strongClick(el){
+  try {
+    var r = el.getBoundingClientRect();
+    var o = { bubbles: true, cancelable: true,
+      clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+    el.dispatchEvent(new MouseEvent('pointerdown', o));
+    el.dispatchEvent(new MouseEvent('mousedown', o));
+    el.dispatchEvent(new MouseEvent('pointerup', o));
+    el.dispatchEvent(new MouseEvent('mouseup', o));
+    el.dispatchEvent(new MouseEvent('click', o));
+  } catch (e) { try { el.click(); } catch (e2) {} }
+}
 function stepMissing(step, detail){
   post('SEARCH_STEP_MISSING', detail ? { step: step, detail: detail } : { step: step });
   return false;
@@ -189,13 +201,45 @@ function trainListVisible(){
   }
   return false;
 }
+function isOptionEl(el){
+  var tag = (el.tagName || '').toLowerCase();
+  if (tag === 'option' || tag === 'li') return true;
+  var cls = ' ' + norm(el.className || '') + ' ';
+  if (cls.indexOf('p-dropdown-item') >= 0 || cls.indexOf('ui-dropdown-item') >= 0) return true;
+  return (el.getAttribute('role') || '') === 'option';
+}
+function findSearchButton(){
+  // The live search control is not always a <button> reading exactly
+  // "Search Trains" (seen on-device 2026-09-29: exact match found nothing).
+  var cands = document.querySelectorAll('button, input[type="submit"], input[type="button"], a');
+  var fallback = null;
+  for (var i = 0; i < cands.length; i++) {
+    var el = cands[i];
+    if (!visible(el) || isOptionEl(el)) continue;
+    var tag = (el.tagName || '').toLowerCase();
+    var t = tag === 'input'
+      ? norm(el.getAttribute('value') || '')
+      : norm(el.innerText || el.textContent || '');
+    if (!t) continue;
+    if (t === 'search trains') return el;
+    if (t.indexOf('search') >= 0 && t.indexOf('train') >= 0) return el;
+    if (t.indexOf('search') >= 0 && !fallback) fallback = el;
+  }
+  return fallback;
+}
 async function stepTapSearch(){
   if (trainListVisible()) return stepOk('tapSearch', { skipped: true, reason: 'list-already-showing' });
-  var btn = exactButton('Search Trains');
-  if (!btn) return stepMissing('tapSearch');
+  var btn = findSearchButton();
+  if (!btn) return stepMissing('tapSearch', 'Search Trains button not found');
   clickEl(btn);
-  await sleep(1500);
-  return stepOk('tapSearch');
+  await sleep(2500);
+  if (!trainListVisible()) { strongClick(btn); await sleep(2500); }
+  for (var i = 0; i < 6 && !trainListVisible(); i++) {
+    if (!guard()) return false;
+    await sleep(1000);
+  }
+  if (trainListVisible()) return stepOk('tapSearch');
+  return stepMissing('tapSearch', 'train list did not load after tapping Search');
 }
 async function stepWaitList(){
   if (trainListVisible()) { post('SEARCH_STEP', { step: 'waitList', skipped: true }); return true; }

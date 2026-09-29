@@ -613,6 +613,38 @@ async function waitForEvent(page, type, timeoutMs) {
       await page.close();
     }
 
+    // ============ Phase G1b: search button is <input type="submit"> ========
+    // (live page is not always <button>Search Trains</button>)
+    {
+      const plan = {
+        trainNo: '12873',
+        classCode: '3A',
+        dateISO: '2026-09-29',
+        dateCard: postsearch.toDateCard('2026-09-29'),
+      };
+      const page = await browser.newPage();
+      await page.goto('file://' + MOCK_BOOKING + '?inputbtn=1');
+      const script = postsearch.buildPostSearchScript(plan, { seed: SEED });
+      checkScript('postsearch-inputbtn', script);
+      await page.addScriptTag({ content: script });
+      await waitForEvent(page, 'PASSENGER_PAGE_READY', 90000);
+      const log = await eventLog(page);
+      const types = log.map((e) => e.type);
+      if (types.includes('SEARCH_STEP_MISSING')) {
+        fail('SEARCH_INPUTBTN: missing steps: ' + log.filter((e) => e.type === 'SEARCH_STEP_MISSING').map((e) => e.data.step + ':' + (e.data.detail || '')).join(','));
+      }
+      const st = await page.evaluate(() => ({
+        search: window.__searchClicked,
+        paxShown: document.getElementById('paxPage').style.display !== 'none',
+        submits: window.__formSubmits,
+      }));
+      if (st.search !== 1) fail('SEARCH_INPUTBTN: Search input not clicked exactly once');
+      if (!st.paxShown) fail('SEARCH_INPUTBTN: passenger page not showing');
+      if (st.submits !== 0) fail('SEARCH_INPUTBTN: a form was submitted');
+      console.log('SEARCH_INPUTBTN_OK');
+      await page.close();
+    }
+
     // ============ Phase G2: post-search without the popup ================
     {
       const plan = {

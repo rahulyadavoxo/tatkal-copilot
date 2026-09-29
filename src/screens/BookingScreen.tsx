@@ -345,12 +345,33 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
           return true;
         case 'SEARCH_STEP_MISSING':
         case 'REVIEW_STEP_MISSING':
-        case 'PAYMENT_STEP_MISSING':
+        case 'PAYMENT_STEP_MISSING': {
           setFlowPhase('idle');
+          const stepName: Record<string, string> = {
+            tapSearch: 'the Search Trains button',
+            waitList: 'the train list',
+            selectTrain: 'your train in the results',
+            bookNow: 'the Book Now button',
+            waitPax: 'the passenger-details page',
+            skipCard: 'the Skip option',
+            reviewContinue: 'the Continue button on the review page',
+            reviewJourney: 'the Review Journey section',
+            continueTap: 'the Continue button',
+            payMethods: 'the payment methods',
+            payMethod: 'your payment method',
+            payProvider: 'your payment provider',
+            payContinue: 'the Continue button before payment',
+            payBook: 'the Pay & Book button',
+            payment: 'the payment section',
+            providers: 'the payment providers',
+          };
+          const what = stepName[data.step ?? ''] ?? 'that step';
+          const why = data.detail ? ` (${data.detail})` : '';
           setFlowNotice(
-            `The app couldn\u2019t find “${data.step ?? 'a step'}” on IRCTC\u2019s page — do that step by hand, then tap “🔎 Find train & continue” again to resume.`,
+            `The app couldn\u2019t find ${what} on IRCTC\u2019s page${why} — do that step by hand, then tap “🔎 Find train & continue” again to resume.`,
           );
           return true;
+        }
         case 'POPUP_UNKNOWN':
           setFlowPhase('idle');
           setFlowNotice(
@@ -537,8 +558,17 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
   // Pay & Book). Stops at the payment gateway — the user pays by hand.
   // Every stage is idempotent, so re-tapping after a manual CAPTCHA/OTP
   // resumes.
+  const flowBusySince = useRef(0);
   const onSearchFlowTap = useCallback(() => {
-    if (flowPhase === 'searching' || flowPhase === 'filling' || flowPhase === 'reviewing' || flowPhase === 'paying') return;
+    if (flowPhase === 'searching' || flowPhase === 'filling' || flowPhase === 'reviewing' || flowPhase === 'paying') {
+      // A tap while genuinely busy is ignored — but a phase stuck with no
+      // progress (e.g. the injected script died silently) must not brick
+      // the button forever. The engines are idempotent, so a fresh tap
+      // after 2 idle minutes safely resumes.
+      if (Date.now() - flowBusySince.current < 120000) return;
+      setFlowPhase('idle');
+    }
+    flowBusySince.current = Date.now();
     setFlowNotice(null);
     if (!trip) return;
     let plan: PostSearchPlan;
