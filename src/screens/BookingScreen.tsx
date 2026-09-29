@@ -233,7 +233,8 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
             : '';
         const ddDetail: string = data.step === 'dropdown' ? String(data.detail ?? '') : '';
         const ddWhich = ddDetail.indexOf('quota') === 0 ? 'quota' : ddDetail.indexOf('class') === 0 ? 'class' : 'list';
-        const ddWhy = ddDetail.indexOf('no-option') >= 0 ? 'pick the option in' : 'find';
+        const ddWhy = ddDetail.indexOf('no-option') >= 0 ? 'pick the option in'
+          : ddDetail.indexOf('no-stick') >= 0 ? 'set' : 'find';
         setPrebookNotice(
           data.step === 'date'
             ? `The app couldn\u2019t tap your travel date in IRCTC\u2019s calendar${why} — pick the date by hand, then tap “🚀 Start booking” again to continue.`

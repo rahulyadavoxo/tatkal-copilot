@@ -487,6 +487,34 @@ async function waitForEvent(page, type, timeoutMs) {
       await page.close();
     }
 
+    // ===== Phase E2e: dropdown skip when the value is already correct =====
+    // The class control already shows the wanted class: the engine must not
+    // reopen its panel (exactly one panel open overall — the quota one).
+    {
+      const page = await browser.newPage();
+      await page.goto('file://' + MOCK_PREBOOK + '?pdrop=1&presel=1');
+      const plan = Object.assign({}, PREBOOK_PLAN, { classCode: '1A' });
+      await page.addScriptTag({ content: prebook.buildPrebookScript(plan, { seed: SEED }) });
+      await waitForEvent(page, 'PREBOOK_DONE', 90000);
+      const log = await eventLog(page);
+      const missing = log.filter((e) => e.type === 'PREBOOK_STEP_MISSING');
+      if (missing.length !== 0) {
+        fail('PREBOOK_PSKIP: missing steps: ' + missing.map((e) => e.data.step + ':' + (e.data.detail || '')).join(', '));
+      }
+      const st = await page.evaluate(() => ({
+        cls: document.getElementById('pdropClassVal').value,
+        quota: document.getElementById('pdropQuotaVal').value,
+        opens: window.__pdropOpens,
+        submits: window.__formSubmits,
+      }));
+      if (st.cls !== 'AC First Class (1A)') fail('PREBOOK_PSKIP: class changed (got "' + st.cls + '")');
+      if (st.quota !== 'TATKAL') fail('PREBOOK_PSKIP: quota wrong (got "' + st.quota + '")');
+      if (st.opens !== 1) fail('PREBOOK_PSKIP: expected exactly 1 panel open, got ' + st.opens);
+      if (st.submits !== 0) fail('PREBOOK_PSKIP: a form was submitted');
+      console.log('PREBOOK_PSKIP_OK');
+      await page.close();
+    }
+
     // ============ Phase F: CAPTCHA on login halts — never bypassed =========
     {
       const page = await browser.newPage();

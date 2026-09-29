@@ -96,7 +96,7 @@ describe('prebook script safety', () => {
       'String', 'Number', 'Boolean', 'parseInt', 'parseFloat', 'isNaN',
       'encodeURIComponent', 'decodeURIComponent', 'setTimeout', 'clearTimeout',
       'setInterval', 'clearInterval', 'requestAnimationFrame', 'document',
-      'window', 'navigator', 'location', 'KeyboardEvent', 'Event', 'CustomEvent',
+      'window', 'navigator', 'location', 'KeyboardEvent', 'MouseEvent', 'Event', 'CustomEvent',
       'URLSearchParams', 'getComputedStyle', 'alert', 'confirm', 'scrollTo',
     ]);
     const keywords = new Set(['if', 'for', 'while', 'switch', 'catch', 'function', 'return']);

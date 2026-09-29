@@ -189,7 +189,9 @@ if (qs.get('realotp') === '1') {
   var panel = document.getElementById('pdropPanel');
   var list = document.getElementById('pdropList');
   var openFor = null;
+  window.__pdropOpens = 0;
   function open(drop, opts, hiddenId){
+    window.__pdropOpens++;
     openFor = { drop: drop, hiddenId: hiddenId };
     list.innerHTML = '';
     opts.forEach(function(o){
@@ -212,6 +214,12 @@ if (qs.get('realotp') === '1') {
   document.getElementById('quotaDrop').addEventListener('click', function(){
     open(this, QUOTA_OPTS, 'pdropQuotaVal');
   });
+  if (qs.get('presel') === '1') {
+    // class already shows the wanted value: the engine must skip it
+    // without opening its panel
+    document.querySelector('#classDrop .p-dropdown-label').textContent = 'AC First Class (1A)';
+    document.getElementById('pdropClassVal').value = 'AC First Class (1A)';
+  }
 })();
 
 // ---- PrimeNG-style date picker (mirrors live IRCTC p-calendar) ----

@@ -747,7 +747,26 @@ function fireChange(el){
   try { el.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
   try { el.dispatchEvent(new Event('blur', { bubbles: true })); } catch (e) {}
 }
-async function pickCustomOption(el, wantedList){
+function displayMatches(displayed, want){
+  // exact ("general") or parenthesized code ("ac first class (1a)" vs "1a").
+  // Plain substring is NOT enough: "premium tatkal" contains "tatkal".
+  var w = norm(want || '');
+  if (!w) return false;
+  return displayed === w || displayed.indexOf('(' + w + ')') >= 0;
+}
+function strongClick(el){
+  try {
+    var r = el.getBoundingClientRect();
+    var o = { bubbles: true, cancelable: true,
+      clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+    el.dispatchEvent(new MouseEvent('pointerdown', o));
+    el.dispatchEvent(new MouseEvent('mousedown', o));
+    el.dispatchEvent(new MouseEvent('pointerup', o));
+    el.dispatchEvent(new MouseEvent('mouseup', o));
+    el.dispatchEvent(new MouseEvent('click', o));
+  } catch (e) { try { el.click(); } catch (e2) {} }
+}
+async function pickCustomOption(el, wantedList, strong){
   clickEl(el);
   await sleep(700);
   var items = [];
@@ -768,13 +787,17 @@ async function pickCustomOption(el, wantedList){
         var t = ((items[k].innerText || items[k].textContent) || '').trim().toLowerCase();
         var want = wantedList[w].toLowerCase();
         var match = pass === 0 ? t === want : t.indexOf(want) !== -1;
-        if (match) { clickEl(items[k]); await sleep(400); return true; }
+        if (match) {
+          if (strong) strongClick(items[k]); else clickEl(items[k]);
+          await sleep(400);
+          return true;
+        }
       }
     }
   }
   return false;
 }
-async function setDropdownValue(el, wantedList){
+async function setDropdownValue(el, wantedList, strong){
   var tag = (el.tagName || '').toLowerCase();
   if (tag === 'select') {
     for (var w = 0; w < wantedList.length; w++) {
@@ -788,7 +811,7 @@ async function setDropdownValue(el, wantedList){
     }
     return false;
   }
-  return pickCustomOption(el, wantedList);
+  return pickCustomOption(el, wantedList, strong);
 }
 function dropdownCurrent(el){
   var tag = (el.tagName || '').toLowerCase();
@@ -799,14 +822,25 @@ function dropdownCurrent(el){
 async function stepDropdown(which){
   var res = which === 'class' ? [/class/] : [/quota/];
   var wanted = which === 'class' ? [PLAN.classCode, 'All Classes'] : [PLAN.quota];
+  var byVal = which === 'class' ? CLASS_VALUE_TEXTS : QUOTA_VALUE_TEXTS;
   var el = findDropdown(res);
-  if (!el) el = findDropdownByValue(which === 'class' ? CLASS_VALUE_TEXTS : QUOTA_VALUE_TEXTS);
+  if (!el) el = findDropdownByValue(byVal);
   if (!el) return stepMissing('dropdown', which + ':not-found');
-  var cur = norm(dropdownCurrent(el));
-  if (cur === norm(wanted[0])) return stepOk('dropdown', { which: which, skipped: true });
-  var ok = await setDropdownValue(el, wanted);
-  if (!ok) return stepMissing('dropdown', which + ':no-option');
-  return stepOk('dropdown', { which: which });
+  if (displayMatches(norm(dropdownCurrent(el)), wanted[0]))
+    return stepOk('dropdown', { which: which, skipped: true });
+  for (var attempt = 0; attempt < 2; attempt++) {
+    var ok = await setDropdownValue(el, wanted, attempt > 0);
+    if (!ok) return stepMissing('dropdown', which + ':no-option');
+    await sleep(500);
+    el = findDropdown(res) || findDropdownByValue(byVal) || el;
+    var disp = norm(dropdownCurrent(el));
+    for (var vi = 0; vi < wanted.length; vi++) {
+      if (displayMatches(disp, wanted[vi])) return stepOk('dropdown', { which: which });
+    }
+  }
+  // The option tap did not change the displayed value (seen on-device
+  // 2026-09-29: quota panel stayed open on GENERAL after PREBOOK_DONE).
+  return stepMissing('dropdown', which + ':no-stick');
 }
 
 // ---------- main ----------
