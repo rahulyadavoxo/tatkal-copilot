@@ -193,6 +193,28 @@
     <div class="sticky"><span>&#8377; 561.80</span> <button id="payBookBtn">Pay &amp; Book</button></div>
   </div>
 
+<script>
+  // ?labels=1 — realistic label variants the live page has shown on-device:
+  // search as a bare link, uppercase date cards (one without leading zero),
+  // hyphenated book-now, CONTINUE with arrow, "Pay and Book".
+  (function () {
+    if (new URLSearchParams(location.search).get('labels') !== '1') return;
+    var sb = document.getElementById('searchBtn');
+    if (sb) { var a = document.createElement('a'); a.id = 'searchBtn'; a.textContent = 'Search'; sb.replaceWith(a); }
+    var dc = document.querySelectorAll('.date-card');
+    if (dc[0]) dc[0].innerHTML = 'TUE, 29 SEP<br><span>WL35</span>';
+    if (dc[1]) dc[1].innerHTML = 'THU, 1 OCT<br><span>WL30</span>';
+    if (dc[2]) dc[2].innerHTML = 'TUE, 29 SEP<br><span>WL12</span>';
+    document.querySelectorAll('.book-now').forEach(function (b) { b.textContent = 'book-now'; });
+    ['continueBtn', 'reviewContinueBtn', 'payContinueBtn'].forEach(function (id) {
+      var b = document.getElementById(id);
+      if (b) b.textContent = 'CONTINUE \u2192';
+    });
+    var pb = document.getElementById('payBookBtn');
+    if (pb) pb.textContent = 'Pay and Book';
+  })();
+</script>
+
   <div id="paymentGateway" style="display:none">PAYMENT GATEWAY — everything from here is manual</div>
 
 <script>

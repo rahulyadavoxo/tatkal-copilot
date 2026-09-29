@@ -213,14 +213,29 @@ async function stepPayment(){
   return stepOk('payment', { mode: mode });
 }
 // ---------- step 4: tap Continue — then STOP, payment is manual ----------
-function exactButton(text){
-  var bs = document.querySelectorAll('button');
+function fuzzyButton(text){
+  // Token match: every word of the wanted label must appear in the control's
+  // text. The live page does not always use the mock's exact labels — seen
+  // on-device 2026-09-29 ("Book Now" vs hyphenated/lowercase variants,
+  // "Pay and Book", "CONTINUE →").
+  var want = norm(text).split(/[^a-z0-9]+/).filter(function (w) { return w; });
+  var bs = (document).querySelectorAll('button, input[type="submit"], input[type="button"]');
   var found = null;
   for (var i = 0; i < bs.length; i++) {
-    if ((bs[i].innerText || '').trim() === text && visible(bs[i])) found = bs[i]; // last = sticky bar
+    var el = bs[i], tag = (el.tagName || '').toLowerCase();
+    if (!visible(el)) continue;
+    var t = tag === 'input' ? norm(el.getAttribute('value') || '')
+                            : norm(el.innerText || el.textContent || '');
+    if (!t) continue;
+    var ok = true;
+    for (var k = 0; k < want.length; k++) {
+      if (t.indexOf(want[k]) < 0) { ok = false; break; }
+    }
+    if (ok) found = el; // last match wins = sticky bottom bar
   }
   return found;
 }
+function exactButton(text){ return fuzzyButton(text); }
 async function stepContinue(){
   var btn = exactButton('Continue');
   if (!btn) return stepMissing('continueTap');

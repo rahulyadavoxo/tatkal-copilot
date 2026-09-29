@@ -194,12 +194,30 @@ function guard(){
   return true;
 }
 // ---------- step 1: tap "Search Trains" ----------
-function trainListVisible(){
-  var bs = document.querySelectorAll('button');
+function fuzzyButton(text, scope){
+  // Token match: every word of the wanted label must appear in the control's
+  // text. The live page does not always use the mock's exact labels — seen
+  // on-device 2026-09-29 ("Book Now" vs hyphenated/lowercase variants,
+  // "Pay and Book", "CONTINUE →").
+  var want = norm(text).split(/[^a-z0-9]+/).filter(function (w) { return w; });
+  var bs = (scope || document).querySelectorAll('button, input[type="submit"], input[type="button"]');
+  var found = null;
   for (var i = 0; i < bs.length; i++) {
-    if ((bs[i].innerText || '').trim() === 'Book Now' && visible(bs[i])) return true;
+    var el = bs[i], tag = (el.tagName || '').toLowerCase();
+    if (!visible(el)) continue;
+    var t = tag === 'input' ? norm(el.getAttribute('value') || '')
+                            : norm(el.innerText || el.textContent || '');
+    if (!t) continue;
+    var ok = true;
+    for (var k = 0; k < want.length; k++) {
+      if (t.indexOf(want[k]) < 0) { ok = false; break; }
+    }
+    if (ok) found = el; // last match wins = sticky bottom bar
   }
-  return false;
+  return found;
+}
+function trainListVisible(){
+  return !!fuzzyButton('Book Now');
 }
 function isOptionEl(el){
   var tag = (el.tagName || '').toLowerCase();
@@ -253,9 +271,13 @@ async function stepWaitList(){
 
 // ---------- step 2: find the train's card, tap class tab + date, tap Book Now ----------
 function findTrainCard(trainNo){
-  var btns = document.querySelectorAll('button');
+  var btns = document.querySelectorAll('button, input[type="submit"], input[type="button"]');
   for (var i = 0; i < btns.length; i++) {
-    if ((btns[i].innerText || '').trim() !== 'Book Now') continue;
+    var bt = norm(btns[i].tagName === 'INPUT'
+      ? (btns[i].getAttribute('value') || '')
+      : (btns[i].innerText || btns[i].textContent || ''));
+    // "book"+"now": matches "Book Now" but never "Re-Book Favourite".
+    if (bt !== 'book now' && (bt.indexOf('book') < 0 || bt.indexOf('now') < 0)) continue;
     if (!visible(btns[i])) continue;
     var p = btns[i].parentElement;
     for (var d = 0; d < 8 && p; d++, p = p.parentElement) {
@@ -302,11 +324,13 @@ function findClassBox(card, code){
 }
 function findDateCard(card, dateCard){
   var els = card.querySelectorAll('button, div, li, span, a');
+  var want = norm(dateCard);            // 'dd mon', e.g. '02 oct'
+  var wantAlt = want.replace(/^0/, ''); // live cards sometimes drop the zero: '2 oct'
   var best = null, bestLen = 1e9;
   for (var i = 0; i < els.length; i++) {
     if (!visible(els[i])) continue;
-    var t = els[i].innerText || '';
-    if (t.indexOf(dateCard) === -1) continue;
+    var t = norm(els[i].innerText || '');
+    if (t.indexOf(want) === -1 && t.indexOf(wantAlt) === -1) continue;
     if (t.length < bestLen) { best = els[i]; bestLen = t.length; } // deepest/smallest match
   }
   return best;
@@ -341,7 +365,7 @@ async function stepSelectTrain(){
   clickEl(dateEl);
   await sleep(900);
   card = findTrainCard(PLAN.trainNo) || card;
-  var book = exactButton('Book Now', card);
+  var book = fuzzyButton('Book Now', card);
   if (!book) return stepMissing('bookNow', 'Book Now not in train card');
   clickEl(book);
   await sleep(1500);

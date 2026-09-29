@@ -645,6 +645,49 @@ async function waitForEvent(page, type, timeoutMs) {
       await page.close();
     }
 
+    // ============ Phase G3: post-search with live-style label variants ====
+    {
+      const plan = {
+        trainNo: '12873',
+        classCode: '3A',
+        dateISO: '2026-09-29',
+        dateCard: postsearch.toDateCard('2026-09-29'),
+      };
+      const page = await browser.newPage();
+      await page.goto('file://' + MOCK_BOOKING + '?labels=1');
+      const script = postsearch.buildPostSearchScript(plan, { seed: SEED });
+      checkScript('postsearch-labels', script);
+      await page.addScriptTag({ content: script });
+      await waitForEvent(page, 'PASSENGER_PAGE_READY', 90000);
+      const log = await eventLog(page);
+      const types = log.map((e) => e.type);
+      if (types.includes('SEARCH_STEP_MISSING')) {
+        fail('SEARCH_LABELS: missing steps: ' + log.filter((e) => e.type === 'SEARCH_STEP_MISSING').map((e) => e.data.step + ':' + (e.data.detail || '')).join(','));
+      }
+      const st = await page.evaluate(() => ({
+        search: window.__searchClicked,
+        box: window.__boxClicked,
+        tab: window.__tabClicked,
+        date: window.__dateClicked,
+        bookTrain: window.__bookNowTrain,
+        yes: window.__yesClicked,
+        popupHidden: window.getComputedStyle(document.getElementById('confirmPopup')).display === 'none',
+        paxShown: document.getElementById('paxPage').style.display !== 'none',
+        submits: window.__formSubmits,
+      }));
+      if (st.search !== 1) fail('SEARCH_LABELS: Search link not clicked exactly once');
+      if (st.box !== 'SL') fail('SEARCH_LABELS: class box not tapped (got "' + st.box + '")');
+      if (st.tab !== '3A') fail('SEARCH_LABELS: class tab wrong (got "' + st.tab + '")');
+      if (st.date !== 'TUE, 29 SEP') fail('SEARCH_LABELS: date card wrong (got "' + st.date + '")');
+      if (st.bookTrain !== '12873') fail('SEARCH_LABELS: book-now hit the wrong train (' + st.bookTrain + ')');
+      if (st.yes !== 1) fail('SEARCH_LABELS: popup Yes not clicked');
+      if (!st.popupHidden) fail('SEARCH_LABELS: popup still open');
+      if (!st.paxShown) fail('SEARCH_LABELS: passenger page not showing');
+      if (st.submits !== 0) fail('SEARCH_LABELS: a form was submitted');
+      console.log('SEARCH_LABELS_OK');
+      await page.close();
+    }
+
     // ============ Phase G2: post-search without the popup ================
     {
       const plan = {
@@ -715,6 +758,34 @@ async function waitForEvent(page, type, timeoutMs) {
       await page.close();
     }
 
+    // ============ Phase H3: review with live-style label variants ==========
+    {
+      const script = review.buildReviewScript({ paymentMode: 'bhim' }, { seed: SEED });
+      checkScript('review-labels', script);
+      const page = await browser.newPage();
+      await page.goto('file://' + MOCK_BOOKING + '?state=passenger&labels=1');
+      await page.addScriptTag({ content: script });
+      await waitForEvent(page, 'REVIEW_DONE', 90000);
+      const log = await eventLog(page);
+      if (log.map((e) => e.type).includes('REVIEW_STEP_MISSING')) {
+        fail('REVIEW_LABELS: missing steps: ' + log.filter((e) => e.type === 'REVIEW_STEP_MISSING').map((e) => e.data.step).join(','));
+      }
+      const st = await page.evaluate(() => ({
+        skip: document.getElementById('skipRadio').checked,
+        bhim: document.getElementById('payBhim').checked,
+        cont: window.__continueClicked,
+        reviewJourney: window.getComputedStyle(document.getElementById('reviewJourneyPage')).display !== 'none',
+        submits: window.__formSubmits,
+      }));
+      if (!st.skip) fail('REVIEW_LABELS: Skip card option not selected');
+      if (!st.bhim) fail('REVIEW_LABELS: BHIM/UPI not selected');
+      if (st.cont !== 1) fail('REVIEW_LABELS: CONTINUE arrow not clicked exactly once');
+      if (!st.reviewJourney) fail('REVIEW_LABELS: Review Journey page did not open');
+      if (st.submits !== 0) fail('REVIEW_LABELS: a form was submitted');
+      console.log('REVIEW_LABELS_OK');
+      await page.close();
+    }
+
     // ============ Phase H2: review with IRCTC-default payment ============
     {
       const page = await browser.newPage();
@@ -776,6 +847,43 @@ async function waitForEvent(page, type, timeoutMs) {
       if (!st.gateway) fail('PAYMENT: gateway marker not reached after Pay & Book');
       if (st.submits !== 0) fail('PAYMENT: a form was submitted');
       console.log('PAYMENT_OK');
+      await page.close();
+    }
+
+    // ============ Phase I3: payment with live-style label variants =========
+    {
+      const plan = { paymentMethod: 'ipay', paymentProvider: 'phonepe' };
+      const script = payment.buildPaymentScript(plan, { seed: SEED });
+      checkScript('payment-labels', script);
+      const violations = payment.scanPaymentForViolations(script);
+      if (violations.length !== 0) {
+        fail('PAYMENT_LABELS: script violations: ' + violations.join('; '));
+      }
+      const page = await browser.newPage();
+      await page.goto('file://' + MOCK_BOOKING + '?state=review&labels=1');
+      await page.addScriptTag({ content: script });
+      await waitForEvent(page, 'GATEWAY_REACHED', 90000);
+      const log = await eventLog(page);
+      if (log.map((e) => e.type).includes('PAYMENT_STEP_MISSING')) {
+        fail('PAYMENT_LABELS: missing steps: ' + log.filter((e) => e.type === 'PAYMENT_STEP_MISSING').map((e) => e.data.step).join(','));
+      }
+      const st = await page.evaluate(() => ({
+        reviewCont: window.__reviewContinueClicked,
+        ipayChecked: Array.from(document.querySelectorAll('input[name="paymethod"]')).find((r) => r.value === 'ipay').checked,
+        payCont: window.__payContinueClicked,
+        provider: window.__providerSelected,
+        payBook: window.__payBookClicked,
+        gateway: window.getComputedStyle(document.getElementById('paymentGateway')).display !== 'none',
+        submits: window.__formSubmits,
+      }));
+      if (st.reviewCont !== 1) fail('PAYMENT_LABELS: Review Journey Continue not clicked');
+      if (!st.ipayChecked) fail('PAYMENT_LABELS: IRCTC iPay not selected');
+      if (st.payCont !== 1) fail('PAYMENT_LABELS: Payment Methods Continue not clicked');
+      if (st.provider !== 'phonepe') fail('PAYMENT_LABELS: PhonePe not selected (got "' + st.provider + '")');
+      if (st.payBook !== 1) fail('PAYMENT_LABELS: Pay and Book not clicked exactly once');
+      if (!st.gateway) fail('PAYMENT_LABELS: gateway marker not reached');
+      if (st.submits !== 0) fail('PAYMENT_LABELS: a form was submitted');
+      console.log('PAYMENT_LABELS_OK');
       await page.close();
     }
 

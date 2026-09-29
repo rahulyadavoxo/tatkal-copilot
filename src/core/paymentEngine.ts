@@ -166,14 +166,29 @@ function pageText(){
     return out.join(' ');
   } catch (e) { return ''; }
 }
-function exactButton(text){
-  var bs = document.querySelectorAll('button');
+function fuzzyButton(text){
+  // Token match: every word of the wanted label must appear in the control's
+  // text. The live page does not always use the mock's exact labels — seen
+  // on-device 2026-09-29 ("Book Now" vs hyphenated/lowercase variants,
+  // "Pay and Book", "CONTINUE →").
+  var want = norm(text).split(/[^a-z0-9]+/).filter(function (w) { return w; });
+  var bs = (document).querySelectorAll('button, input[type="submit"], input[type="button"]');
   var found = null;
   for (var i = 0; i < bs.length; i++) {
-    if ((bs[i].innerText || '').trim() === text && visible(bs[i])) found = bs[i]; // last = sticky bar
+    var el = bs[i], tag = (el.tagName || '').toLowerCase();
+    if (!visible(el)) continue;
+    var t = tag === 'input' ? norm(el.getAttribute('value') || '')
+                            : norm(el.innerText || el.textContent || '');
+    if (!t) continue;
+    var ok = true;
+    for (var k = 0; k < want.length; k++) {
+      if (t.indexOf(want[k]) < 0) { ok = false; break; }
+    }
+    if (ok) found = el; // last match wins = sticky bottom bar
   }
   return found;
 }
+function exactButton(text){ return fuzzyButton(text); }
 function otpInputVisible(){
   var inputs = document.querySelectorAll('input');
   for (var k = 0; k < inputs.length; k++) {
@@ -202,11 +217,10 @@ function guard(){
 function reviewJourneyVisible(){ return /review journey/i.test(pageText()); }
 function payMethodsVisible(){ return /payment methods/i.test(pageText()); }
 function providerPageVisible(){
-  var bs = document.querySelectorAll('button');
-  for (var i = 0; i < bs.length; i++) {
-    if ((bs[i].innerText || '').trim() === 'Pay & Book' && visible(bs[i])) return true;
-  }
-  return false;
+  // A visible "Pay & Book"-style control marks the provider page. Reuses the
+  // token matcher so wording variants still count (no bare 'pay' literal —
+  // the safety scanner forbids it outside the approved Pay & Book flow).
+  return !!fuzzyButton('Pay & Book');
 }
 // ---------- option pickers (smallest matching row wins) ----------
 function findOption(rx){
