@@ -538,17 +538,55 @@ function overlayMonthYear(root){
   }
   return null;
 }
+function calTitleEl(root){
+  // deepest element whose own text is the "Month YYYY" title
+  var found = null;
+  var els = root.querySelectorAll('div, span, button, caption, h1, h2, h3, h4');
+  for (var i = 0; i < els.length; i++) {
+    var et = norm(els[i].innerText || els[i].textContent || '');
+    if (!et || et.length > 40) continue;
+    if (calMonthYearFromText(et)) found = els[i];
+  }
+  return found;
+}
 function calNavButton(root, prev){
   var b = root.querySelector(prev ? '.p-datepicker-prev' : '.p-datepicker-next');
   if (b && visible(b)) return b;
+  // structural: the buttons flanking the month-year title are prev/next
+  // (covers icon-font chevrons with no text or aria-label — the 2026-09-29
+  // on-device "would not turn to your travel month" failure)
+  try {
+    var titleEl = calTitleEl(root);
+    if (titleEl && titleEl.parentElement) {
+      var sibs = titleEl.parentElement.children;
+      var ti = -1;
+      for (var s = 0; s < sibs.length; s++) if (sibs[s] === titleEl) ti = s;
+      if (ti >= 0) {
+        var cands = prev ? [ti - 1, ti - 2] : [ti + 1, ti + 2];
+        for (var q = 0; q < cands.length; q++) {
+          var sb = sibs[cands[q]];
+          if (!sb) continue;
+          var bb = (sb.tagName === 'BUTTON' || sb.tagName === 'A' ||
+                    (sb.getAttribute && sb.getAttribute('role') === 'button'))
+                   ? sb : sb.querySelector('button, a, [role="button"]');
+          if (bb && visible(bb)) return bb;
+        }
+      }
+    }
+  } catch (e) {}
+  // heuristics: aria-label, chevron text, or chevron icon classes
   var btns = root.querySelectorAll('button, [role="button"], a');
   for (var i = 0; i < btns.length; i++) {
     var el = btns[i];
     if (!visible(el)) continue;
     var lab = norm(el.getAttribute('aria-label') || '');
     var txt = norm(el.innerText || el.textContent || '').trim();
-    var isPrev = lab.indexOf('prev') >= 0 || txt === '‹' || txt === '<' || txt === '«';
-    var isNext = lab.indexOf('next') >= 0 || txt === '›' || txt === '>' || txt === '»';
+    var cls = norm(el.className || '');
+    try { cls += ' ' + norm(el.innerHTML || ''); } catch (e2) {}
+    var isPrev = lab.indexOf('prev') >= 0 || txt === '‹' || txt === '<' || txt === '«' ||
+                 cls.indexOf('prev') >= 0 || /chevron-left|arrow-left|caret-left|angle-left/.test(cls);
+    var isNext = lab.indexOf('next') >= 0 || txt === '›' || txt === '>' || txt === '»' ||
+                 cls.indexOf('next') >= 0 || /chevron-right|arrow-right|caret-right|angle-right/.test(cls);
     if (prev && isPrev && !isNext) return el;
     if (!prev && isNext && !isPrev) return el;
   }
@@ -609,10 +647,15 @@ async function pickDateFromCalendar(input, target){
     if (!dp) await sleep(500);
   }
   if (!dp) return 'no-overlay';
+  var stuck = 0, lastKey = '';
   for (var n = 0; n < 30; n++) {
     var shown = overlayMonthYear(dp);
     if (!shown) return 'no-title';
     if (shown.m === target.m && shown.y === target.y) break;
+    var key = shown.m + '/' + shown.y;
+    stuck = (key === lastKey) ? stuck + 1 : 0;
+    lastKey = key;
+    if (stuck >= 3) return 'no-nav'; // taps are not turning the month
     var goPrev = (shown.y > target.y) || (shown.y === target.y && shown.m > target.m);
     var btn = calNavButton(dp, goPrev);
     if (!btn) return 'no-nav';
@@ -656,12 +699,22 @@ async function stepDate(){
   if (findCalendarOverlay()) { dismissCalendar(); await sleep(300); }
   return stepOk('date');
 }
+function isOptionEl(el){
+  var tag = (el.tagName || '').toLowerCase();
+  if (tag === 'option' || tag === 'li') return true;
+  var cls = ' ' + (el.className || '') + ' ';
+  if (cls.indexOf('p-dropdown-item') >= 0 || cls.indexOf('ui-dropdown-item') >= 0) return true;
+  try { if (el.getAttribute('role') === 'option') return true; } catch (e) {}
+  return false;
+}
 function findDropdown(res){
-  var cands = document.querySelectorAll('select, mat-select, .p-dropdown, [role="combobox"], .ui-dropdown');
+  var cands = document.querySelectorAll(
+    'select, mat-select, .p-dropdown, [role="combobox"], .ui-dropdown, ' +
+    'div[class*="dropdown"], button[class*="dropdown"]');
   var labelHits = [];
   for (var i = 0; i < cands.length; i++) {
     var el = cands[i];
-    if (!visible(el)) continue;
+    if (!visible(el) || isOptionEl(el)) continue;
     var attr = norm(attrHaystack(el));
     var hit = false, attrHit = false;
     for (var r = 0; r < res.length; r++) {
@@ -684,11 +737,15 @@ async function pickCustomOption(el, wantedList){
   var i;
   for (i = 0; i < scoped.length; i++) if (visible(scoped[i])) items.push(scoped[i]);
   if (!items.length) {
-    var all = document.querySelectorAll('[role="option"]');
+    // PrimeNG-style panels render at the body level, outside the control
+    var all = document.querySelectorAll(
+      '[role="option"], .p-dropdown-item, .ui-dropdown-item, ' +
+      '.p-dropdown-panel li, .ui-dropdown-panel li, [role="listbox"] li');
     for (i = 0; i < all.length && items.length < 60; i++) if (visible(all[i])) items.push(all[i]);
   }
-  for (var pass = 0; pass < 2; pass++) {
-    for (var w = 0; w < wantedList.length; w++) {
+  // try each wanted value in preference order (exact first, then substring)
+  for (var w = 0; w < wantedList.length; w++) {
+    for (var pass = 0; pass < 2; pass++) {
       for (var k = 0; k < items.length; k++) {
         var t = ((items[k].innerText || items[k].textContent) || '').trim().toLowerCase();
         var want = wantedList[w].toLowerCase();
@@ -725,11 +782,11 @@ async function stepDropdown(which){
   var res = which === 'class' ? [/class/] : [/quota/];
   var wanted = which === 'class' ? [PLAN.classCode, 'All Classes'] : [PLAN.quota];
   var el = findDropdown(res);
-  if (!el) return stepMissing('dropdown', which);
+  if (!el) return stepMissing('dropdown', which + ':not-found');
   var cur = norm(dropdownCurrent(el));
   if (cur === norm(wanted[0])) return stepOk('dropdown', { which: which, skipped: true });
   var ok = await setDropdownValue(el, wanted);
-  if (!ok) return stepMissing('dropdown', which);
+  if (!ok) return stepMissing('dropdown', which + ':no-option');
   return stepOk('dropdown', { which: which });
 }
 

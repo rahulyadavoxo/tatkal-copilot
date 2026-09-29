@@ -436,6 +436,57 @@ async function waitForEvent(page, type, timeoutMs) {
       await page.close();
     }
 
+    // ===== Phase E2d: icon-font calendar nav (no text/aria-label on buttons)
+    // Mirrors the 2026-09-29 on-device report: the ">" button is an icon font
+    // with no accessible name — only the structural flanking-title path works.
+    {
+      const page = await browser.newPage();
+      await page.goto('file://' + MOCK_PREBOOK + '?altcal=1&iconnav=1');
+      await page.addScriptTag({ content: prebook.buildPrebookScript(PREBOOK_PLAN, { seed: SEED }) });
+      await waitForEvent(page, 'PREBOOK_DONE', 90000);
+      const log = await eventLog(page);
+      const missing = log.filter((e) => e.type === 'PREBOOK_STEP_MISSING');
+      if (missing.length !== 0) {
+        fail('PREBOOK_ICONNAV: missing steps: ' + missing.map((e) => e.data.step + ':' + (e.data.detail || '')).join(', '));
+      }
+      const st = await page.evaluate(() => ({
+        date: document.getElementById('dateInput').value,
+        submits: window.__formSubmits,
+      }));
+      if (st.date !== '15/10/2026') fail('PREBOOK_ICONNAV: date wrong (got "' + st.date + '")');
+      if (st.submits !== 0) fail('PREBOOK_ICONNAV: a form was submitted');
+      console.log('PREBOOK_ICONNAV_OK');
+      await page.close();
+    }
+
+    // ===== Phase E2c: PrimeNG-style div dropdowns (body-level panel) ======
+    // Mirrors the 2026-09-29 on-device report: the class/quota controls are
+    // div-based dropdowns whose option panel renders at the body level,
+    // outside the control element.
+    {
+      const page = await browser.newPage();
+      await page.goto('file://' + MOCK_PREBOOK + '?pdrop=1');
+      await page.addScriptTag({ content: prebook.buildPrebookScript(PREBOOK_PLAN, { seed: SEED }) });
+      await waitForEvent(page, 'PREBOOK_DONE', 90000);
+      const log = await eventLog(page);
+      const missing = log.filter((e) => e.type === 'PREBOOK_STEP_MISSING');
+      if (missing.length !== 0) {
+        fail('PREBOOK_PDROP: missing steps: ' + missing.map((e) => e.data.step + ':' + (e.data.detail || '')).join(', '));
+      }
+      const st = await page.evaluate(() => ({
+        cls: document.getElementById('pdropClassVal').value,
+        quota: document.getElementById('pdropQuotaVal').value,
+        date: document.getElementById('dateInput').value,
+        submits: window.__formSubmits,
+      }));
+      if (st.date !== '15/10/2026') fail('PREBOOK_PDROP: date wrong (got "' + st.date + '")');
+      if (st.cls !== 'AC 3 Tier (3A)') fail('PREBOOK_PDROP: class wrong (got "' + st.cls + '")');
+      if (st.quota !== 'TATKAL') fail('PREBOOK_PDROP: quota wrong (got "' + st.quota + '")');
+      if (st.submits !== 0) fail('PREBOOK_PDROP: a form was submitted');
+      console.log('PREBOOK_PDROP_OK');
+      await page.close();
+    }
+
     // ============ Phase F: CAPTCHA on login halts — never bypassed =========
     {
       const page = await browser.newPage();

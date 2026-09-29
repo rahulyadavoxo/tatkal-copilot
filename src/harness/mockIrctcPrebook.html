@@ -122,6 +122,31 @@
   </div>
 </section>
 
+<!-- PrimeNG-style class/quota dropdowns (?pdrop=1): options live in a
+     body-level panel, outside the control element, like the live page -->
+<section id="pdropSection" style="display:none">
+  <div class="field">
+    <span id="classDropLabel">Class</span>
+    <div class="p-dropdown" id="classDrop" aria-label="Class" role="combobox" tabindex="0"
+         style="border:1px solid #999;padding:6px;display:flex;justify-content:space-between">
+      <span class="p-dropdown-label">All Classes</span><span>&#8744;</span>
+    </div>
+  </div>
+  <div class="field">
+    <span id="quotaDropLabel">Quota</span>
+    <div class="p-dropdown" id="quotaDrop" aria-label="Quota" role="combobox" tabindex="0"
+         style="border:1px solid #999;padding:6px;display:flex;justify-content:space-between">
+      <span class="p-dropdown-label">GENERAL</span><span>&#8744;</span>
+    </div>
+  </div>
+</section>
+<div class="p-dropdown-panel" id="pdropPanel"
+     style="display:none;position:absolute;z-index:60;background:#fff;border:1px solid #999;min-width:220px">
+  <ul id="pdropList" style="list-style:none;margin:0;padding:0"></ul>
+</div>
+<input type="hidden" id="pdropClassVal" value="All Classes">
+<input type="hidden" id="pdropQuotaVal" value="GENERAL">
+
 <script>
 window.__tatkalEventLog = [];
 window.__formSubmits = 0;
@@ -148,6 +173,46 @@ if (qs.get('captcha') === '1') {
 if (qs.get('realotp') === '1') {
   document.getElementById('realOtpBlock').style.display = 'block';
 }
+
+// ---- PrimeNG-style dropdowns (?pdrop=1) ----
+(function(){
+  if (qs.get('pdrop') !== '1') return;
+  document.getElementById('pdropSection').style.display = 'block';
+  // hide the native selects so the engine must use the PrimeNG-style divs
+  ['classSelect', 'quotaSelect'].forEach(function(id){
+    var f = document.getElementById(id).closest('.field');
+    if (f) f.style.display = 'none';
+  });
+  var CLASS_OPTS = ['All Classes','AC First Class (1A)','AC 2 Tier (2A)','AC 3 Tier (3A)',
+                    'Sleeper (SL)','Second Sitting (2S)'];
+  var QUOTA_OPTS = ['GENERAL','LADIES','TATKAL','PREMIUM TATKAL'];
+  var panel = document.getElementById('pdropPanel');
+  var list = document.getElementById('pdropList');
+  var openFor = null;
+  function open(drop, opts, hiddenId){
+    openFor = { drop: drop, hiddenId: hiddenId };
+    list.innerHTML = '';
+    opts.forEach(function(o){
+      var li = document.createElement('li');
+      li.className = 'p-dropdown-item';
+      li.style.padding = '6px';
+      li.textContent = o;
+      li.addEventListener('click', function(){
+        drop.querySelector('.p-dropdown-label').textContent = o;
+        document.getElementById(hiddenId).value = o;
+        panel.style.display = 'none';
+      });
+      list.appendChild(li);
+    });
+    panel.style.display = 'block';
+  }
+  document.getElementById('classDrop').addEventListener('click', function(){
+    open(this, CLASS_OPTS, 'pdropClassVal');
+  });
+  document.getElementById('quotaDrop').addEventListener('click', function(){
+    open(this, QUOTA_OPTS, 'pdropQuotaVal');
+  });
+})();
 
 // ---- PrimeNG-style date picker (mirrors live IRCTC p-calendar) ----
 (function(){
@@ -213,6 +278,15 @@ if (qs.get('realotp') === '1') {
     '<button type="button" class="alt-next" aria-label="Next month">&#8250;</button>' +
     '</div><div class="alt-grid" style="display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-top:8px"></div>';
   document.body.appendChild(alt);
+  if (qs.get('iconnav') === '1') {
+    // icon-font chevrons with no aria-label and no keyword in the class names
+    // (mirrors the 2026-09-29 live page): only the structural "button flanking
+    // the title" path can find these
+    var pb = alt.querySelector('.alt-prev'), nb = alt.querySelector('.alt-next');
+    pb.removeAttribute('aria-label'); nb.removeAttribute('aria-label');
+    pb.innerHTML = '<span class="glyph gl"></span>';
+    nb.innerHTML = '<span class="glyph gr"></span>';
+  }
   function render(){
     alt.querySelector('.alt-cal-title').textContent = NAMES[viewM - 1] + ' ' + viewY;
     var grid = alt.querySelector('.alt-grid');
