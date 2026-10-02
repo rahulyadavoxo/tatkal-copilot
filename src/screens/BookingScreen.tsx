@@ -30,8 +30,9 @@
  *   Continue / Book / Pay buttons themselves, by hand.
  *
  * EXTENDED 2026-09-27 (explicit user instruction — their own IRCTC
- * account): after the pre-booking stage the user can tap "🔎 Find train &
- * continue", which runs the post-search engine (taps Search Trains, picks
+ * account): after the pre-booking stage the flow continues by itself
+ * (zero-tap, user-authorized 2026-10-02): the "🔎 Find train & continue"
+ * button remains only as a manual start / retry. It runs the post-search engine (taps Search Trains, picks
  * the train/class/date, taps Book Now, taps Yes on IRCTC's station-mismatch
  * confirmation) and then auto-chains the fill engine, the review engine
  * (Skip card option, payment mode per the trip, taps the review page's
@@ -162,6 +163,12 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
   const [flowNotice, setFlowNotice] = useState<string | null>(null);
   const flowPhaseRef = useRef(flowPhase);
   flowPhaseRef.current = flowPhase;
+  // Zero-tap auto-start (user-authorized 2026-10-02 — "don't want to tap
+  // anywhere"): when the pre-booking engine finishes, the search flow
+  // starts by itself after a short settle delay. The "🔎 Find train &
+  // continue" button stays as a manual start / retry.
+  const autoStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onSearchFlowTapRef = useRef<() => void>(() => {});
   const otpRefs = useRef<Array<TextInput | null>>([]);
   const probeResolver = useRef<((ready: boolean, reason: string) => void) | null>(null);
 
@@ -177,7 +184,8 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
   }, []);
 
   // Pre-booking event routing. The engine never taps Search Trains /
-  // Continue / Book — it stops at PREBOOK_DONE and the user takes over.
+  // Continue / Book — it stops at PREBOOK_DONE, and the search flow then
+  // starts automatically (zero-tap); the button is only a manual retry.
   const handlePrebookEvent = useCallback((type: string, data: { step?: string; detail?: string }) => {
     switch (type) {
       case 'PREBOOK_STARTED':
@@ -189,13 +197,22 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
           { type: 'PREBOOK_STEP', t: Date.now(), data } as PrebookEvent,
         ]);
         break;
-      case 'PREBOOK_DONE':
+      case 'PREBOOK_DONE': {
         prebookActive.current = false;
         setPrebookState('done');
         setPrebookNotice(
-          'Search details are filled — review them on IRCTC\u2019s page, then tap “🔎 Find train & continue” below.',
+          'Search details are filled — the app taps “Search Trains” by itself in a moment. You can still tap “🔎 Find train & continue” below to start it right away.',
         );
+        // Zero-tap start: kick the search flow automatically once the page
+        // settles. onSearchFlowTap is idempotent (busy guard), so a manual
+        // tap in the meantime simply wins and this timer becomes a no-op.
+        if (autoStartTimer.current) clearTimeout(autoStartTimer.current);
+        autoStartTimer.current = setTimeout(() => {
+          autoStartTimer.current = null;
+          onSearchFlowTapRef.current();
+        }, 2000);
         break;
+      }
       case 'CAPTCHA_REQUIRED':
         prebookActive.current = false;
         setPrebookState('idle');
@@ -586,6 +603,16 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
     webRef.current?.injectJavaScript(buildPostSearchScript(plan));
   }, [flowPhase, trip]);
 
+  // Keep the ref pointing at the latest flow starter (it closes over the
+  // current flowPhase/trip). Clear a pending auto-start if we unmount.
+  onSearchFlowTapRef.current = onSearchFlowTap;
+  useEffect(
+    () => () => {
+      if (autoStartTimer.current) clearTimeout(autoStartTimer.current);
+    },
+    [],
+  );
+
   // Hardware back: first step back inside the IRCTC page, otherwise let the
   // app-level handler pop the screen (App.tsx). Never exits from here.
   useEffect(() => {
@@ -693,13 +720,14 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
           login, fills your saved IRCTC login, and fills From / To / Date /
           Class / Quota on the search page. If IRCTC shows a CAPTCHA, you
           solve it by hand.
-          {'\n'}2. Tap "🔎 Find train & continue" — the app taps Search
+          {'\n'}2. The app continues by itself — it taps Search
           Trains, picks your train / class / date, taps Book Now, answers
           Yes on IRCTC's station-mismatch popup, fills the passenger form,
           chooses the Skip card option and your payment mode, taps Continue,
           then on the Review Journey page taps Continue again, picks your
           payment method and provider, and taps Pay & Book. It stops at the
-          payment gateway.
+          payment gateway. (The "🔎 Find train & continue" button is still
+          there if you ever need to start it by hand.)
           {'\n'}3. Pay by hand: complete the payment yourself on the payment
           page / your UPI app — the copilot never touches your money.
           Type the Aadhaar OTP yourself whenever IRCTC asks.
