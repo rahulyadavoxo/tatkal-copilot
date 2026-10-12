@@ -612,18 +612,23 @@ class TatkalTapService : AccessibilityService() {
                 // Device 2026-10-13: Chrome shows IRCTC's alert as ONE Button
                 // ("Confirmation. ... Please select your preferred language ...
                 // press the Enter key") with no English/Hindi buttons. Rotate:
-                // click it, tap its lower part (where OK sits), tap its centre,
-                // then the × close button.
+                // tap where the language button is drawn, then click it, then ×.
                 val dlg = snap.firstOrNull { it.lower.contains("preferred language") && (it.clickable || it.node.className?.toString() == "android.widget.Button") } ?: anchor
                 val x = snap.firstOrNull { it.lower == "×" || it.lower == "✕" || it.lower == "close" }
+                // Device screenshot: [हिंदी] [English] sit side by side at the
+                // dialog's bottom, ~6% of its height above the edge; English
+                // centre at ~58% of the width, हिंदी at ~38% (the middle is a gap).
                 val attempt = rec.count % 4
                 rec.count += 1; rec.lastTs = System.currentTimeMillis()
                 val b = dlg.bounds
-                val ok = when (attempt) {
-                    0 -> clickNodeOrAncestor(dlg.node)
-                    1 -> b.height() > 0 && gestureTap(b.exactCenterX(), (b.bottom - minOf(60, b.height() / 6)).toFloat())
-                    2 -> b.height() > 0 && gestureTap(b.exactCenterX(), b.exactCenterY())
-                    else -> x != null && tapNode(x)
+                val hindi = wants.any { it == "हिंदी" }
+                val fx = b.left + b.width() * (if (hindi) 0.38f else 0.585f)
+                val dy = (b.height() * 0.062f).coerceIn(45f, 120f)
+                val ok = b.height() > 0 && when (attempt) {
+                    0 -> gestureTap(fx, b.bottom - dy)
+                    1 -> gestureTap(fx, b.bottom - dy - 35f)
+                    2 -> gestureTap(fx, b.bottom - dy + 25f)
+                    else -> clickNodeOrAncestor(dlg.node) || (x != null && tapNode(x))
                 }
                 engineStatus(stageStatus(stage, say, " — alert has no language buttons; attempt ${attempt + 1}/4 ${if (ok) "sent" else "failed"}"))
                 sleep(800)
