@@ -19,35 +19,41 @@ class TatkalTileService : TileService() {
 
     override fun onStartListening() {
         super.onStartListening()
-        updateTileState(isAutomationEnabled())
+        updateTileState(isSessionRunning())
     }
 
     override fun onClick() {
         super.onClick()
-        // Simple toggle on the master switch, like Wi-Fi/Bluetooth:
-        // tap bright tile -> everything OFF and halts; tap dim tile ->
-        // everything ON and Chrome opens to start booking. The visual
-        // always reflects the pref, synced in onStartListening too.
-        // A toast confirms the tap registered (debug aid).
-        try {
-            android.widget.Toast.makeText(this, "Tatkal tile tapped", android.widget.Toast.LENGTH_SHORT).show()
-        } catch (_: Exception) { }
-        if (isAutomationEnabled()) {
+        // Tap = start booking (Chrome opens), unless a booking run is in
+        // progress right now, in which case tap = stop. Bright tile means a
+        // run is active. This avoids the old pure toggle, where a leftover
+        // ON state made the next tap silently switch everything OFF.
+        if (isSessionRunning()) {
             setAutomationEnabled(false)
             setSessionActive(false)
             updateTileState(false)
-            try {
-                android.widget.Toast.makeText(this, "Auto-booking OFF", android.widget.Toast.LENGTH_SHORT).show()
-            } catch (_: Exception) { }
+            toast("Auto-booking stopped")
         } else {
             setAutomationEnabled(true)
             updateTileState(true)
-            try {
-                android.widget.Toast.makeText(this, "Auto-booking ON — opening Chrome", android.widget.Toast.LENGTH_SHORT).show()
-            } catch (_: Exception) { }
+            toast("Auto-booking ON — opening Chrome")
             openChrome()
         }
     }
+
+    private fun toast(msg: String) {
+        try {
+            android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) { }
+    }
+
+    /** A run counts as live only if its heartbeat is recent (process deaths leave stale flags). */
+    private fun isSessionRunning(): Boolean = try {
+        val p = getSharedPreferences(TatkalTapService.PREFS_AUTOMATION, Context.MODE_PRIVATE)
+        p.getBoolean(TatkalTapService.KEY_AUTOMATION_ENABLED, false) &&
+            p.getBoolean(TatkalTapService.KEY_SESSION_ACTIVE, false) &&
+            System.currentTimeMillis() - p.getLong(TatkalTapService.KEY_SESSION_TS, 0L) < 15_000L
+    } catch (_: Exception) { false }
 
     private fun openChrome() {
         val targetPkg = findBrowserPackage()
@@ -106,13 +112,6 @@ class TatkalTileService : TileService() {
             ).edit().putBoolean(TatkalTapService.KEY_AUTOMATION_ENABLED, on).apply()
         } catch (_: Exception) { }
     }
-
-    private fun isSessionActive(): Boolean = try {
-        getSharedPreferences(
-            TatkalTapService.PREFS_AUTOMATION,
-            Context.MODE_PRIVATE
-        ).getBoolean(TatkalTapService.KEY_SESSION_ACTIVE, false)
-    } catch (_: Exception) { false }
 
     private fun setSessionActive(active: Boolean) {
         try {
