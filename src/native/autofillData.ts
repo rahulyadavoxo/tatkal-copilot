@@ -72,9 +72,29 @@ export const DEFAULT_CHOREO_MAP = {
   },
   pages: [
     {
+      // IRCTC shows a language prompt on first visit ("Please select your
+      // preferred language"). Handle it before anything else so it never
+      // blocks the search page. Checked first: first-match wins.
+      id: 'language',
+      detect: { allContains: ['preferred language'] },
+      steps: [{ do: 'tap', text: 'English' }],
+    },
+    {
+      // Safety: if IRCTC's login form is visible, do nothing. Credentials
+      // are only ever typed by the user; the engine must never fill these.
+      id: 'login',
+      detect: { allContains: ['user name', 'password'] },
+      steps: [],
+    },
+    {
       id: 'search',
       detect: { allContains: ['search trains'] },
       steps: [
+        // If logged out, IRCTC shows a LOGIN button in the header. Tap it
+        // to open the login form; the 'login' safety page then takes over
+        // (does nothing) until the user finishes logging in manually.
+        // If already logged in the button is absent and this is a no-op.
+        { do: 'tap', text: 'LOGIN' },
         // IRCTC's inputs expose no accessible labels (probe 2026-10-12);
         // match by position: 0 = From, 1 = To, 2 = Date.
         { do: 'fillField', fieldIndex: 0, valueKey: 'trip.fromName', pickSuggestion: true },
