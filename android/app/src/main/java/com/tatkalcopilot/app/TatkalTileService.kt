@@ -53,10 +53,9 @@ class TatkalTileService : TileService() {
         val targetPkg = findBrowserPackage()
         if (targetPkg == null) {
             // No browser: open the app so the user sees the guidance.
-            val launch = packageManager.getLaunchIntentForPackage(packageName)
-            if (launch != null) {
-                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                startActivityAndCollapse(launch)
+            val appIntent = packageManager.getLaunchIntentForPackage(packageName)
+            if (appIntent != null) {
+                launch(appIntent)
             }
             return
         }
@@ -65,9 +64,30 @@ class TatkalTileService : TileService() {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         try {
-            startActivityAndCollapse(open)
-        } catch (_: Exception) {
-            // Fall through: collapse only.
+            launch(open)
+        } catch (e: Exception) {
+            try {
+                android.widget.Toast.makeText(this, "Couldn't open browser: ${e.javaClass.simpleName}", android.widget.Toast.LENGTH_LONG).show()
+            } catch (_: Exception) { }
+        }
+    }
+
+    /**
+     * Android 14+ (targetSdk 34) throws UnsupportedOperationException for
+     * startActivityAndCollapse(Intent); it requires a PendingIntent.
+     */
+    private fun launch(intent: Intent) {
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (Build.VERSION.SDK_INT >= 34) {
+            val pi = android.app.PendingIntent.getActivity(
+                this, 0, intent,
+                android.app.PendingIntent.FLAG_IMMUTABLE or
+                    android.app.PendingIntent.FLAG_UPDATE_CURRENT
+            )
+            startActivityAndCollapse(pi)
+        } else {
+            @Suppress("DEPRECATION")
+            startActivityAndCollapse(intent)
         }
     }
 
@@ -107,8 +127,8 @@ class TatkalTileService : TileService() {
         getSharedPreferences(
             TatkalTapService.PREFS_AUTOMATION,
             Context.MODE_PRIVATE
-        ).getBoolean(TatkalTapService.KEY_AUTOMATION_ENABLED, true)
-    } catch (_: Exception) { true }
+        ).getBoolean(TatkalTapService.KEY_AUTOMATION_ENABLED, false)
+    } catch (_: Exception) { false }
 
     private fun findBrowserPackage(): String? {
         val pm = packageManager
