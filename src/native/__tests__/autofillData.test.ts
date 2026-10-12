@@ -34,7 +34,7 @@ describe('buildFillData', () => {
     const d = buildFillData(trip, passengers);
     expect(d['trip.fromCode']).toBe('DTO');
     expect(d['trip.toCode']).toBe('NDLS');
-    expect(d['trip.date']).toBe('11-10-2026');
+    expect(d['trip.date']).toBe('11/10/2026');
     expect(d['trip.classCode']).toBe('3A');
     expect(d['trip.mobile']).toBe('9876543210');
   });

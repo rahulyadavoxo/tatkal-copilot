@@ -75,9 +75,11 @@ export const DEFAULT_CHOREO_MAP = {
       id: 'search',
       detect: { allContains: ['search trains'] },
       steps: [
-        { do: 'fillField', labelContains: ['from'], valueKey: 'trip.fromName', pickSuggestion: true },
-        { do: 'fillField', labelContains: ['to', 'destination'], valueKey: 'trip.toName', pickSuggestion: true },
-        { do: 'fillField', labelContains: ['date'], valueKey: 'trip.date' },
+        // IRCTC's inputs expose no accessible labels (probe 2026-10-12);
+        // match by position: 0 = From, 1 = To, 2 = Date.
+        { do: 'fillField', fieldIndex: 0, valueKey: 'trip.fromName', pickSuggestion: true },
+        { do: 'fillField', fieldIndex: 1, valueKey: 'trip.toName', pickSuggestion: true },
+        { do: 'fillField', fieldIndex: 2, valueKey: 'trip.date' },
         { do: 'tap', text: 'Search Trains' },
       ],
     },
@@ -108,8 +110,9 @@ const stationName = (code: string): string =>
   STATIONS.find((s) => s.code === code)?.name ?? code;
 
 function toDDMMYYYY(yyyyMmDd: string): string {
+  // IRCTC's date field displays slashes ("12/10/2026", seen on device).
   const [y, m, d] = yyyyMmDd.split('-');
-  return y && m && d ? `${d}-${m}-${y}` : yyyyMmDd;
+  return y && m && d ? `${d}/${m}/${y}` : yyyyMmDd;
 }
 
 export function buildFillData(trip: Trip, passengers: Passenger[]): Record<string, string> {

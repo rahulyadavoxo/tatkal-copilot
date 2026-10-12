@@ -74,6 +74,9 @@ class TatkalTapService : AccessibilityService() {
     // later steps (especially taps) still run. Keyed by page+step index.
     private val stepAttempts = mutableMapOf<String, Int>()
     private val skippedSteps = mutableSetOf<String>()
+    // Autocomplete steps (pickSuggestion): the suggestion tap is a separate
+    // phase — setting the text alone must NOT count as done.
+    private val suggestionPicked = mutableSetOf<String>()
     private var lastEngineStatus = "idle"
 
     private fun engineStatus(s: String) {
@@ -199,9 +202,9 @@ class TatkalTapService : AccessibilityService() {
                 val step = steps.optJSONObject(s) ?: continue
                 val stepKey = "$pageId:$s"
                 if (skippedSteps.contains(stepKey)) continue
-                if (isStepDone(step, root, fillData)) continue
+                if (isStepDone(stepKey, step, root, fillData)) continue
                 allDone = false
-                val progressed = executeStep(step, root, fillData)
+                val progressed = executeStep(stepKey, step, root, fillData)
                 if (!progressed) {
                     val n = (stepAttempts[stepKey] ?: 0) + 1
                     stepAttempts[stepKey] = n
@@ -229,6 +232,7 @@ class TatkalTapService : AccessibilityService() {
     }
 
     private fun isStepDone(
+        stepKey: String,
         step: JSONObject,
         root: AccessibilityNodeInfo,
         fillData: JSONObject
@@ -237,6 +241,10 @@ class TatkalTapService : AccessibilityService() {
             "fillField" -> {
                 val value = resolveValue(step.optString("valueKey"), fillData)
                 if (value.isEmpty()) return true // nothing to fill: skip
+                // Autocomplete: not done until the suggestion itself was tapped.
+                if (step.optBoolean("pickSuggestion", false) &&
+                    !suggestionPicked.contains(stepKey)
+                ) return false
                 val field = findField(root, step) ?: return false
                 val current = field.text?.toString() ?: ""
                 current.contains(value)
@@ -248,6 +256,7 @@ class TatkalTapService : AccessibilityService() {
 
     /** Returns true when the step acted (or had nothing to do); false when its target wasn't found. */
     private fun executeStep(
+        stepKey: String,
         step: JSONObject,
         root: AccessibilityNodeInfo,
         fillData: JSONObject
@@ -268,11 +277,15 @@ class TatkalTapService : AccessibilityService() {
                     )
                     field.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
                     return true
-                } else if (step.optBoolean("pickSuggestion", false)) {
+                }
+                if (step.optBoolean("pickSuggestion", false) &&
+                    !suggestionPicked.contains(stepKey)
+                ) {
                     // Autocomplete dropdown: tap the suggestion showing our value.
                     val suggestion = findClickableText(root, value)
                     return if (suggestion != null) {
                         suggestion.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                        suggestionPicked.add(stepKey)
                         true
                     } else false
                 }
@@ -293,8 +306,21 @@ class TatkalTapService : AccessibilityService() {
     // Node finding
     // ------------------------------------------------------------------
 
-    /** Finds an editable field matching the step's label patterns. */
+    /**
+     * Finds an editable field matching the step. Two modes:
+     * - fieldIndex: the Nth editable field in traversal order (IRCTC's
+     *   From/To/Date inputs expose no accessible label, but their order is
+     *   stable: 0 = From, 1 = To, 2 = Date).
+     * - labelContains: match by visible text / description / hint.
+     */
     private fun findField(root: AccessibilityNodeInfo, step: JSONObject): AccessibilityNodeInfo? {
+        if (step.has("fieldIndex")) {
+            val idx = step.optInt("fieldIndex", -1)
+            if (idx < 0) return null
+            val editables = mutableListOf<AccessibilityNodeInfo>()
+            collectEditables(root, editables)
+            return editables.getOrNull(idx)
+        }
         val labels = jsonStrList(step.optJSONArray("labelContains")).map { it.lowercase() }
         if (labels.isEmpty()) return null
         return findNode(root) { node ->
@@ -303,6 +329,13 @@ class TatkalTapService : AccessibilityService() {
             val desc = (node.contentDescription?.toString() ?: "").lowercase()
             val hint = node.hintText?.toString()?.lowercase() ?: ""
             labels.any { text.contains(it) || desc.contains(it) || hint.contains(it) }
+        }
+    }
+
+    private fun collectEditables(node: AccessibilityNodeInfo, out: MutableList<AccessibilityNodeInfo>) {
+        if (node.isEditable) out.add(node)
+        for (i in 0 until node.childCount) {
+            node.getChild(i)?.let { collectEditables(it, out) }
         }
     }
 
