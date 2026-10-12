@@ -690,7 +690,7 @@ class TatkalTapService : AccessibilityService() {
         if (snap.any { it.node.isPassword }) return Res.DONE
         val rec = taps[key]
         if (rec != null && rec.count >= 1) return Res.DONE
-        val target = snap.firstOrNull { it.lower == "login" || it.lower == "sign in" }
+        val target = snap.firstOrNull { it.lower == "login" || it.lower == "sign in" || it.lower.startsWith("login /") }
             ?: snap.firstOrNull {
                 val d = (it.node.contentDescription?.toString() ?: "").lowercase()
                 d.isNotEmpty() && Regex("log\\s?in|sign\\s?in|user|person|account|profile").containsMatchIn(d)
