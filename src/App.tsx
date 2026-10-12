@@ -17,6 +17,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   BackHandler,
   SafeAreaView,
   StatusBar,
@@ -31,6 +32,7 @@ import { BottomTabs, type TabName } from './components/BottomTabs';
 import { SnackbarProvider } from './components/ui';
 import UpdateBanner from './components/UpdateBanner';
 import { checkForAppUpdate } from './updates';
+import { syncLatestAutomationData } from './native/tatkalProbe';
 import { isOnboardingDone } from './onboarding';
 import HomeScreen from './screens/HomeScreen';
 import PassengersScreen from './screens/PassengersScreen';
@@ -142,6 +144,17 @@ function AppShell() {
     return () => {
       live = false;
     };
+  }, []);
+
+  // Keep the tap service's choreography map + trip data fresh, so a
+  // booking started from the Quick Settings tile uses the latest steps
+  // (language, login, search) without opening the Booking screen first.
+  useEffect(() => {
+    void syncLatestAutomationData();
+    const sub = AppState.addEventListener('change', (st) => {
+      if (st === 'active' || st === 'background') void syncLatestAutomationData();
+    });
+    return () => sub.remove();
   }, []);
 
   // Hardware back button: pop the app's screen stack. Screens with a WebView
