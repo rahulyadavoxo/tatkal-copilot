@@ -1,1 +1,18 @@
-{"build":{"preview":{"android":{"buildType":"apk"}},"production":{"android":{"buildType":"app-bundle"}}},"cli":{"version":">= 24.0.0"}}
+{
+  "build": {
+    "preview": {
+      "android": {
+        "buildType": "apk"
+      },
+      "channel": "preview"
+    },
+    "production": {
+      "android": {
+        "buildType": "app-bundle"
+      }
+    }
+  },
+  "cli": {
+    "version": ">= 24.0.0"
+  }
+}

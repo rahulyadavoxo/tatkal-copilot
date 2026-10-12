@@ -24,7 +24,8 @@
  * "+ Add Passenger" button is clicked (by visible text) to create blocks for
  * pax1+.
  *
- * Hard lines enforced here:
+ * Hard lines (verified by scanForAutobookViolations + unit tests in CI —
+ * the scanners are test-time checks, NOT runtime guards in the shipped app):
  *  - Total fill time respects the anti-bot floor from src/core/tatkalConfig.ts
  *    (defensive import + fallback below). Pacing-floor scaling (documented):
  *      floor(pax) = max(MIN_FILL_SECONDS_5PAX, PER_PAX_FLOOR_S * pax)
@@ -34,7 +35,8 @@
  *  - Per-field gap >= 120ms with seeded jitter.
  *  - The script contains ZERO submit capability: no form.submit(), no
  *    requestSubmit(), no reference to any book/continue/pay button, anywhere.
- *    scanForAutobookViolations() asserts this on the whole script.
+ *    scanForAutobookViolations() asserts this on the generated script in
+ *    CI/harness; it does not run inside the shipped app.
  *  - On an OTP screen the engine halts and emits OTP_REQUIRED.
  */
 
@@ -43,7 +45,29 @@ export interface PassengerInput {
   age: number;
   gender: string; // 'M' | 'F' | 'O'
   berthPref: string; // 'LB' | 'MB' | 'UB' | 'SL' | 'SU' | 'NP'
+  /** Meal choice for the catering dropdown, exactly as IRCTC labels it
+   *  ('Veg', 'Non Veg', 'Jain Meal', 'Veg (Diabetic)', 'Non Veg (Diabetic)').
+   *  Optional — the engine defaults to 'Veg' when unset. */
+  mealPref?: string;
 }
+
+/**
+ * The catering options IRCTC shows on premium trains (Rajdhani / Shatabdi /
+ * Vande Bharat / Duronto …), exactly as labelled. The "Catering Service
+ * Option" dropdown is MANDATORY on those trains — IRCTC blocks Continue
+ * ("Please select your Catering Service Choice") until every passenger has
+ * one picked. Field report 2026-10-08: the engine didn't fill it at all.
+ */
+export const MEAL_OPTIONS = [
+  'Veg',
+  'Non Veg',
+  'Jain Meal',
+  'Veg (Diabetic)',
+  'Non Veg (Diabetic)',
+] as const;
+
+/** Default meal when a saved passenger has no preference stored. */
+export const DEFAULT_MEAL = 'Veg';
 
 export interface FillPlan {
   trainNo: string;
@@ -90,21 +114,21 @@ export interface FieldAction {
   locator: FieldLocator;
   /** For select/radio: visible-text candidates for the desired option. */
   optionText?: string[];
+  /**
+   * When true, a missing widget is NOT fatal: the script posts
+   * FIELD_SKIPPED and carries on. Used for the catering dropdown, which
+   * exists only on premium trains — on ordinary trains its absence must
+   * not halt the whole booking. When the widget IS found but the option
+   * can't be picked, that's still a FIELD_MISSING.
+   */
+  optional?: boolean;
 }
 
 export interface FillEvent {
-  type: 'FILL_STARTED' | 'FIELD_FILLED' | 'FIELD_MISSING' | 'OTP_REQUIRED' | 'FILL_COMPLETE' | 'FORM_PROBE_RESULT';
+  type: 'FILL_STARTED' | 'FIELD_FILLED' | 'FIELD_MISSING' | 'FIELD_SKIPPED' | 'OTP_REQUIRED' | 'FILL_COMPLETE' | 'FILL_HALTED_MISSING' | 'FORM_PROBE_RESULT';
   /** ms, from the page's performance.now() clock — relative, used for pacing math */
   t: number;
   data: Record<string, unknown>;
-}
-
-export interface Alternate {
-  trainNo: string;
-  date: string;
-  classCode: string;
-  seatsAvailable: number;
-  label: string; // raw row text, for display/debugging
 }
 
 // ---------------------------------------------------------------------------
@@ -251,6 +275,21 @@ export function buildFieldActions(plan: FillPlan): FieldAction[] {
           paxIndex: i,
         },
       },
+      {
+        // Catering Service Option — mandatory on premium trains (IRCTC
+        // blocks Continue without it), absent on ordinary trains, hence
+        // optional: skip silently when the widget isn't on the page.
+        kind: 'select',
+        value: p.mealPref || DEFAULT_MEAL,
+        label: `pax${i}.catering`,
+        optionText: [p.mealPref || DEFAULT_MEAL],
+        optional: true,
+        locator: {
+          id: `pax${i}Catering`,
+          labelText: ['Catering Service Option', 'Catering Service Opt'],
+          paxIndex: i,
+        },
+      },
     );
   });
   // Other-preference: auto-upgradation checkbox. 'on' ticks it (user asked
@@ -277,6 +316,11 @@ export function buildFieldActions(plan: FillPlan): FieldAction[] {
       },
     });
   }
+  // Travel-insurance radio. Optional: IRCTC doesn't render this control on
+  // every page variant (e.g. premium trains with catering show no
+  // insurance radio on the passenger page — field report 2026-10-08). When
+  // the widget is absent the fill skips it and moves to the next step;
+  // when it IS present the user's choice is applied as before.
   actions.push({
     kind: 'radio',
     value: plan.travelInsurance ? 'yes' : 'no',
@@ -284,6 +328,7 @@ export function buildFieldActions(plan: FillPlan): FieldAction[] {
     optionText: plan.travelInsurance
       ? ['Yes, and I accept']
       : ["No, I don't want"],
+    optional: true,
     locator: { labelText: ['Travel Insurance'] },
   });
   return actions;
@@ -391,6 +436,11 @@ export function buildFillScript(plan: FillPlan, opts: BuildOptions = {}): string
   const floorMs = requiredFloorMs(plan.passengers.length);
 
   // JSON-embedded data: no string interpolation of user values into code.
+  // SECURITY (audit #38, accepted residual risk): passenger PII (names, ages,
+  // genders, berth prefs, contact mobile) travels as PLAINTEXT in this
+  // injected script, which shares the page JS world. Inherent to autofill
+  // and bounded: the user already trusts IRCTC with this data, it never
+  // leaves the device in an event payload, and it is never logged.
   const actionsJson = JSON.stringify(actions);
   const gapsJson = JSON.stringify(gaps);
 
@@ -399,9 +449,10 @@ export function buildFillScript(plan: FillPlan, opts: BuildOptions = {}): string
 var ACTIONS = ${actionsJson};
 var GAPS = ${gapsJson};
 var FLOOR_MS = ${floorMs};
+var SEED = ${seed};
 var log = (window.__tatkalEventLog = window.__tatkalEventLog || []);
 function post(type, data){
-  var e = { type: type, t: Math.round(performance.now()), data: data || {} };
+  var e = { type: type, t: Math.round(performance.now()), seed: SEED, data: data || {} };
   log.push(e);
   try {
     if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
@@ -428,6 +479,10 @@ function otpVisible(){
 }
 var halted = false;
 var otpAnnounced = false;
+// Set when any required field could not be filled. The chain must NOT report
+// FILL_COMPLETE then — BookingScreen stops the auto-chain instead of driving
+// review/payment on an incomplete passenger form.
+var missed = false;
 function onOtp(){
   if (otpAnnounced) return;
   otpAnnounced = true;
@@ -435,10 +490,19 @@ function onOtp(){
   post('OTP_REQUIRED', {});
 }
 // Watch for the OTP screen appearing at ANY time (it can arrive after the
-// user taps through on the real site). We only observe and halt.
+// user taps through on the real site). We only observe and halt. The
+// observer watches childList only — attribute churn from Angular is ignored
+// — and the callback is debounced so otpVisible() never runs hot.
+var otpTimer = null;
 try {
-  var obs = new MutationObserver(function(){ if (otpVisible()) onOtp(); });
-  obs.observe(document.documentElement, { childList: true, subtree: true, attributes: true });
+  var obs = new MutationObserver(function(){
+    if (otpTimer) return;
+    otpTimer = setTimeout(function(){
+      otpTimer = null;
+      if (otpVisible()) onOtp();
+    }, 300);
+  });
+  obs.observe(document.body || document.documentElement, { childList: true, subtree: true });
 } catch (err) { /* observer optional; the pre-step check below is the guarantee */ }
 
 // ---------- human-like field location ----------
@@ -521,7 +585,12 @@ function findField(a){
     }
   }
   if (matches.length === 0) return null;
-  return matches[Math.min(idx, matches.length - 1)];
+  // Never fall back to an earlier passenger's field: when the indexed block
+  // does not exist (e.g. the "+ Add Passenger" tap failed), writing into
+  // another passenger's field silently corrupts their data. A missing block
+  // is a FIELD_MISSING, not a different passenger's data.
+  if (idx >= matches.length) return null;
+  return matches[idx];
 }
 function fire(el, name){
   try { el.dispatchEvent(new Event(name, { bubbles: true })); } catch (e) {}
@@ -537,6 +606,10 @@ function setInputValue(el, value){
     else el.value = value;
   } catch (e) { el.value = value; }
   fire(el, 'input'); fire(el, 'change'); fire(el, 'blur');
+}
+function visible(el){
+  try { var r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; }
+  catch (e) { return false; }
 }
 function pickOptionText(options, candidates){
   // exact visible-text match first ('Lower' must not match 'Side Lower')
@@ -578,26 +651,54 @@ function setCustomSelect(el, a){
     try { el.scrollIntoView({ block: 'center' }); } catch (e) {}
     try { el.click(); } catch (e) { done(false); return; }
     setTimeout(function(){
-      // Scope the option search to the widget just opened: a document-wide
-      // query would hit OTHER passengers' dropdown items first (document
-      // order) and fill the wrong passenger's widget. PrimeNG-style panels
-      // live inside the widget; Material-style overlays render at body
-      // level, so fall back to a document query that excludes p-dropdown
-      // descendants (those always belong to their own scoped widget).
+      // Scope the option search to THIS widget's panel — never the whole
+      // document. Every passenger's dropdown holds identically-worded
+      // options ("Male", "Lower"), and a document-wide query fills the
+      // wrong passenger's widget (document order wins).
+      var list = [];
+      // 1. options inside the widget itself (PrimeNG-style inline panels)
       var scoped = el.querySelectorAll('mat-option, .mat-option, .p-dropdown-item, [role="option"]');
-      var opts = scoped.length > 0 ? Array.from(scoped) :
-        Array.from(document.querySelectorAll('mat-option, .mat-option, [role="option"]'))
-          .filter(function(o){ return !o.closest('.p-dropdown'); });
+      for (var s = 0; s < scoped.length; s++) list.push(scoped[s]);
+      if (list.length === 0) {
+        // 2. the panel this tap just opened: the one referenced by the
+        //    control (aria-owns / aria-controls), else the most recently
+        //    opened visible overlay (Material-style body-level overlays).
+        var panel = null;
+        var panelId = null;
+        try { panelId = el.getAttribute('aria-owns') || el.getAttribute('aria-controls'); } catch (e) {}
+        if (panelId) { try { panel = document.getElementById(panelId); } catch (e2) {} }
+        if (!panel) {
+          var ovs = document.querySelectorAll(
+            '.cdk-overlay-container [role="listbox"], .cdk-overlay-container .mat-select-panel, ' +
+            '.cdk-overlay, .mat-select-panel, .p-dropdown-panel, [role="listbox"]');
+          for (var q = ovs.length - 1; q >= 0; q--) {
+            if (visible(ovs[q])) { panel = ovs[q]; break; }
+          }
+        }
+        if (panel) {
+          var po = panel.querySelectorAll('mat-option, .mat-option, [role="option"], .p-dropdown-item, li');
+          for (var r = 0; r < po.length; r++) list.push(po[r]);
+        }
+      }
       var texts = [];
-      for (var i = 0; i < opts.length; i++) texts.push({ text: opts[i].innerText || opts[i].textContent, el: opts[i] });
+      for (var i = 0; i < list.length; i++) texts.push({ text: list[i].innerText || list[i].textContent, el: list[i] });
       var at = pickOptionText(texts, a.optionText || [a.value]);
+      // No resolvable panel/option for THIS widget: close the overlay and
+      // report missing. Never fall back to a document-wide option query.
       if (at === -1) { try { document.body.click(); } catch (e) {} done(false); return; }
       try {
         var target = texts[at].el;
         try { target.scrollIntoView({ block: 'center' }); } catch (e) {}
         target.click();
       } catch (e) { done(false); return; }
-      setTimeout(function(){ done(true); }, 250);
+      // Verify the choice landed in THIS widget (its displayed text changed
+      // to the picked option) before trusting the tap.
+      var wantShown = norm(texts[at].text).trim();
+      setTimeout(function(){
+        var shown = '';
+        try { shown = norm(el.innerText || el.textContent || ''); } catch (e) {}
+        done(wantShown !== '' && shown.indexOf(wantShown) !== -1);
+      }, 250);
     }, 400);
   });
 }
@@ -652,13 +753,20 @@ function runAction(a){
     if (a.kind === 'addPassenger') {
       var ok = clickAddPassenger(a);
       post(ok ? 'FIELD_FILLED' : 'FIELD_MISSING', { label: a.label });
+      if (!ok) missed = true;
       // give the new passenger block a moment to render
       setTimeout(resolve, ok ? 700 : 0);
       return;
     }
     var el = findField(a);
-    if (!el) { post('FIELD_MISSING', { label: a.label }); resolve(); return; }
+    // Optional fields (e.g. the catering dropdown, which exists only on
+    // premium trains) skip silently when their widget isn't on the page —
+    // their absence must not halt the booking. A widget that IS found but
+    // can't be set still reports FIELD_MISSING below.
+    if (!el && a.optional) { post('FIELD_SKIPPED', { label: a.label }); resolve(); return; }
+    if (!el) { missed = true; post('FIELD_MISSING', { label: a.label }); resolve(); return; }
     var done = function(ok){
+      if (ok === false) missed = true;
       post(ok === false ? 'FIELD_MISSING' : 'FIELD_FILLED', { label: a.label });
       resolve();
     };
@@ -692,7 +800,14 @@ var idx = 0;
 function step(){
   if (halted) return;
   if (otpVisible()) { onOtp(); return; }
-  if (idx >= ACTIONS.length) { post('FILL_COMPLETE', { fields: ACTIONS.length, floorMs: FLOOR_MS }); return; }
+  if (idx >= ACTIONS.length) {
+    // A missing required field stops the chain here: FILL_COMPLETE is only
+    // posted when every action filled. BookingScreen treats
+    // FILL_HALTED_MISSING as a hard stop (no auto-chain to review/payment).
+    if (missed) { post('FILL_HALTED_MISSING', { fields: ACTIONS.length, floorMs: FLOOR_MS }); }
+    else { post('FILL_COMPLETE', { fields: ACTIONS.length, floorMs: FLOOR_MS }); }
+    return;
+  }
   runAction(ACTIONS[idx]).then(function(){
     idx += 1;
     setTimeout(step, GAPS[Math.min(idx, GAPS.length - 1)]);
@@ -718,10 +833,13 @@ else {
 /**
  * Returns a small self-contained script. When injected it posts exactly one
  * FORM_PROBE_RESULT event: { ready: boolean, reason: 'ok' | 'no-form' |
- * 'blocked' | 'error' }. 'blocked' means IRCTC served its Access-Denied page.
+ * 'blocked' | 'error' }. 'blocked' means IRCTC served its Access-Denied page. The caller passes the current probe seed so
+ * the app can reject spoofed probe results from page scripts (message
+ * authentication).
  */
-export function buildFormProbeScript(): string {
+export function buildFormProbeScript(seed: number): string {
   return `(function(){
+var SEED = ${seed};
 function post(d){
   try { window.ReactNativeWebView.postMessage(JSON.stringify(d)); } catch (e) {}
 }
@@ -731,48 +849,16 @@ try {
   try { bodyText = (document.body ? document.body.innerText : '').slice(0, 4000); } catch (e) {}
   var all = title + ' ' + bodyText;
   if (/access denied/i.test(all) || /edgesuite|akamai/i.test(title)) {
-    post({ type: 'FORM_PROBE_RESULT', t: Math.round(performance.now()), data: { ready: false, reason: 'blocked' } });
+    post({ type: 'FORM_PROBE_RESULT', t: Math.round(performance.now()), seed: SEED, data: { ready: false, reason: 'blocked' } });
     return;
   }
   var inputs = document.querySelectorAll('input[type="text"], input:not([type])').length;
   var selects = document.querySelectorAll('select, mat-select, .p-dropdown').length;
   var mentionsPax = /passenger/i.test(all);
   var ready = mentionsPax && (inputs + selects) >= 3;
-  post({ type: 'FORM_PROBE_RESULT', t: Math.round(performance.now()), data: { ready: ready, reason: ready ? 'ok' : 'no-form' } });
+  post({ type: 'FORM_PROBE_RESULT', t: Math.round(performance.now()), seed: SEED, data: { ready: ready, reason: ready ? 'ok' : 'no-form' } });
 } catch (err) {
-  post({ type: 'FORM_PROBE_RESULT', t: 0, data: { ready: false, reason: 'error' } });
+  post({ type: 'FORM_PROBE_RESULT', t: 0, seed: SEED, data: { ready: false, reason: 'error' } });
 }
 })();`;
-}
-
-// ---------------------------------------------------------------------------
-// Alternates parser (L2 fallback lane)
-// ---------------------------------------------------------------------------
-
-/**
- * Parses the mock train-list snapshot for alternate trains. The real page
- * will differ; this is validated against the mock only.
- */
-export function parseAlternates(snapshotHtml: string): Alternate[] {
-  const alts: Alternate[] = [];
-  const rowRe = /<tr[^>]*class="altRow"[^>]*>([\s\S]*?)<\/tr>/gi;
-  let m: RegExpExecArray | null;
-  while ((m = rowRe.exec(snapshotHtml)) !== null) {
-    const row = m[1];
-    const attr = (name: string): string => {
-      const mm = new RegExp(`data-${name}="([^"]*)"`, 'i').exec(m![0]);
-      return mm ? mm[1] : '';
-    };
-    const text = row.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    const trainNo = attr('train') || (/(\d{5})/.exec(text)?.[1] ?? '');
-    const seatsM = /(\d+)\s*seats?/i.exec(text);
-    alts.push({
-      trainNo,
-      date: attr('date'),
-      classCode: attr('class'),
-      seatsAvailable: seatsM ? parseInt(seatsM[1], 10) : 0,
-      label: text,
-    });
-  }
-  return alts;
 }

@@ -12,11 +12,11 @@ import {
   genderOptionText,
   MIN_FIELD_GAP_MS,
   mulberry32,
-  parseAlternates,
   requiredFloorMs,
   scanForAutobookViolations,
   FillPlan,
 } from '../fillEngine';
+import { parseAlternates } from '../../harness/parseAlternates';
 
 const FOUR_PAX: FillPlan = {
   trainNo: '12951',
@@ -36,14 +36,14 @@ const FOUR_PAX: FillPlan = {
   ],
 };
 
-// 4 pax: pax0 = 4 fields; pax1..3 = addPassenger + 4 fields each;
-// + auto-upgradation checkbox + contact mobile + travel insurance radio.
-const FIELD_COUNT_4PAX = 4 + 3 * 5 + 3; // 22
+// 4 pax: pax0 = 5 fields (name/age/gender/berth/catering); pax1..3 =
+// addPassenger + 5 fields each; + auto-upgradation checkbox + contact
+// mobile + travel insurance radio.
+const FIELD_COUNT_4PAX = 5 + 3 * 6 + 3; // 26
 
 describe('pacing math', () => {
-  test('22 actions (4 pax): every gap >= 120ms and total >= 4.2s floor', () => {
-    const gaps = computeFieldGaps(FIELD_COUNT_4PAX, 1234, 4);
-    expect(gaps).toHaveLength(FIELD_COUNT_4PAX);
+  test('26 actions (4 pax): every gap >= 120ms and total >= 4.2s floor', () => {
+    const gaps = computeFieldGaps(FIELD_COUNT_4PAX, 1234, 4);    expect(gaps).toHaveLength(FIELD_COUNT_4PAX);
     for (const g of gaps) expect(g).toBeGreaterThanOrEqual(MIN_FIELD_GAP_MS);
     const total = gaps.reduce((a, b) => a + b, 0);
     expect(total).toBeGreaterThanOrEqual(4200);
@@ -87,9 +87,9 @@ describe('pacing math', () => {
     const actions = buildFieldActions(FOUR_PAX);
     expect(actions).toHaveLength(FIELD_COUNT_4PAX);
 
-    // pax0: name/age/gender/berth with human-like locators, no add-passenger first.
-    const pax0 = actions.slice(0, 4);
-    expect(pax0.map((a) => a.kind)).toEqual(['input', 'input', 'select', 'select']);
+    // pax0: name/age/gender/berth/catering with human-like locators, no add-passenger first.
+    const pax0 = actions.slice(0, 5);
+    expect(pax0.map((a) => a.kind)).toEqual(['input', 'input', 'select', 'select', 'select']);
     expect(pax0[0]).toMatchObject({
       label: 'pax0.name',
       locator: { attrText: ['Full Name as per Govt'], paxIndex: 0 },
@@ -105,12 +105,13 @@ describe('pacing math', () => {
     const addClicks = actions.filter((a) => a.kind === 'addPassenger');
     expect(addClicks).toHaveLength(3);
     expect(addClicks[0].locator.labelText).toContain('Add Passenger');
-    const pax1 = actions.slice(5, 9);
+    const pax1 = actions.slice(6, 11);
     expect(pax1.map((a) => a.label)).toEqual([
       'pax1.name',
       'pax1.age',
       'pax1.gender',
       'pax1.berth',
+      'pax1.catering',
     ]);
     expect(pax1.every((a) => a.locator.paxIndex === 1)).toBe(true);
 
@@ -129,6 +130,9 @@ describe('pacing math', () => {
       kind: 'radio',
       value: 'yes',
       optionText: ['Yes, and I accept'],
+      // Not on every IRCTC page variant (e.g. catering trains): absent
+      // widget must skip, not halt the booking.
+      optional: true,
     });
 
     // A plan that opts out leaves the auto-upgradation checkbox exactly as
@@ -146,6 +150,39 @@ describe('pacing math', () => {
     });
     // No mobile number -> no mobile action.
     expect(off.some((a) => a.label === 'contact-mobile')).toBe(false);
+  });
+
+  test('catering: optional select per passenger, IRCTC labels, Veg default', () => {
+    const actions = buildFieldActions(FOUR_PAX);
+    const catering = actions.filter((a) => a.label.endsWith('.catering'));
+    expect(catering).toHaveLength(4);
+    // Optional: the widget exists only on premium trains; its absence on
+    // ordinary trains must not halt the booking.
+    expect(catering.every((a) => a.optional === true)).toBe(true);
+    expect(catering[0]).toMatchObject({
+      label: 'pax0.catering',
+      kind: 'select',
+      value: 'Veg',
+      optionText: ['Veg'],
+    });
+    expect(catering[0].locator.labelText).toContain('Catering Service Option');
+    expect(catering[2].locator.paxIndex).toBe(2);
+
+    // A stored meal preference is used verbatim — it already IS IRCTC's label.
+    const custom = buildFieldActions({
+      ...FOUR_PAX,
+      passengers: [
+        { name: 'Aarav Sharma', age: 34, gender: 'M', berthPref: 'LB', mealPref: 'Jain Meal' },
+      ],
+    });
+    const c0 = custom.filter((a) => a.label === 'pax0.catering')[0];
+    expect(c0.value).toBe('Jain Meal');
+    expect(c0.optionText).toEqual(['Jain Meal']);
+
+    // The injected script skips (FIELD_SKIPPED, no halt) when an optional
+    // widget is absent from the page.
+    const src = buildFillScript(FOUR_PAX, { seed: 11 });
+    expect(src).toContain("if (!el && a.optional) { post('FIELD_SKIPPED'");
   });
 
   test('option-text maps use IRCTC visible labels', () => {
@@ -205,10 +242,15 @@ describe('no-auto-book invariant', () => {
   test('dropdown option search is scoped to the opened widget', () => {
     // Regression: with two passenger blocks, a document-wide option query
     // hit passenger 1's dropdown items first (document order) and overwrote
-    // passenger 1's widget when filling passenger 2.
+    // passenger 1's widget when filling passenger 2. Options must come from
+    // the widget itself or the overlay it opened — never a document-wide
+    // option query.
     const src = buildFillScript(FOUR_PAX, { seed: 1 });
     expect(src).toContain('el.querySelectorAll');
-    expect(src).toContain("!o.closest('.p-dropdown')");
+    expect(src).not.toContain("!o.closest('.p-dropdown')");
+    expect(src).not.toContain("document.querySelectorAll('mat-option");
+    expect(src).toContain('aria-owns');
+    expect(src).toContain('aria-controls');
   });
 
   test('data-* attributes count as attribute text for locators', () => {
@@ -262,7 +304,7 @@ describe('parseAlternates (G7)', () => {
 
 describe('form probe (G2 pre-step)', () => {
   test('probe posts exactly one FORM_PROBE_RESULT event', () => {
-    const src = buildFormProbeScript();
+    const src = buildFormProbeScript(7);
     const matches = src.match(/FORM_PROBE_RESULT/g) ?? [];
     // one in each branch: blocked / ready / error
     expect(matches.length).toBe(3);
@@ -270,7 +312,7 @@ describe('form probe (G2 pre-step)', () => {
   });
 
   test('probe carries the passenger-page heuristic, not mock DOM ids', () => {
-    const src = buildFormProbeScript();
+    const src = buildFormProbeScript(7);
     expect(src).toMatch(/passenger/i);
     expect(src).toContain('querySelectorAll');
     // The probe must not depend on the mock harness ids — the live DOM is
@@ -280,15 +322,15 @@ describe('form probe (G2 pre-step)', () => {
   });
 
   test('probe detects the Access-Denied page as blocked', () => {
-    const src = buildFormProbeScript();
+    const src = buildFormProbeScript(7);
     expect(src).toMatch(/access denied/i);
     expect(src).toContain('edgesuite');
     expect(src).toContain("reason: 'blocked'");
   });
 
   test('probe script has zero auto-book violations', () => {
-    expect(findSubmitPatterns(buildFormProbeScript())).toEqual([]);
+    expect(findSubmitPatterns(buildFormProbeScript(7))).toEqual([]);
     // …and it never submits anything at all.
-    expect(buildFormProbeScript()).not.toContain('.submit(');
+    expect(buildFormProbeScript(7)).not.toContain('.submit(');
   });
 });

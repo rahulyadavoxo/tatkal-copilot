@@ -20,7 +20,8 @@
  *   the search form and taps Search Trains themselves.
  * - Credentials are embedded in the injected script only to be typed into
  *   IRCTC's official login inputs. They are NEVER included in event payloads
- *   (scanPrebookForViolations + unit tests enforce this).
+ *   (verified by scanPrebookForViolations + unit tests in CI — a test-time
+ *   check, not a runtime guard).
  * - CAPTCHA/OTP are observed, never solved: the engine halts with
  *   CAPTCHA_REQUIRED / OTP_REQUIRED and the user takes over.
  */
@@ -112,13 +113,19 @@ export function buildPrebookScript(plan: PrebookPlan, opts: PrebookBuildOptions 
   // NOTE: the template below is plain ES5-ish JS that runs inside the WebView.
   // It must not contain backticks or ${ — the outer template literal would
   // interpolate them. PLAN is embedded once at the top.
+  // SECURITY (audit #36, accepted residual risk): the IRCTC username/password
+  // travel as PLAINTEXT in this injected script, which shares the page's JS
+  // world (IIFE scoping is the only separation). This is inherent to DOM
+  // autofill — the value must exist to be typed — and bounded: the user
+  // already trusts IRCTC with these credentials, they never leave the device
+  // in an event payload, and stepSubmitLogin nulls them out once used.
   return `(function(){
 "use strict";
 var PLAN = ${planJson};
 var SEED = ${seed};
 var log = (window.__tatkalEventLog = window.__tatkalEventLog || []);
 function post(type, data){
-  var e = { type: type, t: Math.round(performance.now()), data: data || {} };
+  var e = { type: type, t: Math.round(performance.now()), seed: SEED, data: data || {} };
   log.push(e);
   try {
     if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
@@ -245,11 +252,26 @@ function loginModal(){
   }
   return null;
 }
+function accountAreaText(){
+  // Login-state signals live in the header/account area. The page footer
+  // carries "My Account"/"My Profile" links even when logged OUT, so a
+  // body-wide text match would skip the whole login sequence by mistake.
+  var parts = [];
+  var areas = document.querySelectorAll(
+    'header, nav, [role="banner"], [role="navigation"], ' +
+    '[class*="header"], [class*="account"], [id*="header"], [id*="account"]');
+  for (var i = 0; i < areas.length; i++) {
+    // Skip non-rendered areas: innerText called directly on a display:none
+    // element returns its text anyway (spec), so a hidden "My Account" label
+    // matched by [id*="account"] would fake a logged-in state.
+    if (!visible(areas[i])) continue;
+    try { parts.push(areas[i].innerText || ''); } catch (e) {}
+  }
+  return norm(parts.join(' '));
+}
 function isLoggedIn(){
   if (loginModal()) return false;
-  var t = '';
-  try { t = norm(document.body ? document.body.innerText : ''); } catch (e) {}
-  return /my account|log\\s?out|my profile/.test(t);
+  return /my account|log\\s?out|my profile/.test(accountAreaText());
 }
 function clickableAncestor(el){
   var p = el, d = 0;
@@ -385,12 +407,15 @@ async function stepFillLogin(){
   if (!f.user || !f.pass) return stepMissing('fillLogin');
   setNativeInputValue(f.user, PLAN.username);
   await sleep(250);
+  // SECURITY (audit #37, accepted residual risk): the password lives in the
+  // live DOM input from here on, where any page-context script could read
+  // input.value. Inherent to autofill; bounded by the user trusting IRCTC.
   setNativeInputValue(f.pass, PLAN.password);
   await sleep(250);
   return stepOk('fillLogin');
 }
 async function stepSubmitLogin(){
-  if (isLoggedIn()) return stepOk('submitLogin', { skipped: true });
+  if (isLoggedIn()) { dropCredentials(); return stepOk('submitLogin', { skipped: true }); }
   if (captchaPresent()) { post('CAPTCHA_REQUIRED', {}); return false; }
   var scope = loginModal() || document;
   var btn = null;
@@ -403,11 +428,23 @@ async function stepSubmitLogin(){
   // Never a programmatic form submission, and never anything
   // booking-related.
   clickEl(btn);
-  await sleep(2500);
-  if (captchaPresent()) { post('CAPTCHA_REQUIRED', {}); return false; }
-  if (loginModal()) { post('LOGIN_FAILED', {}); return false; }
+  // Poll for the modal to close (up to ~8s): a single fixed sleep can report
+  // LOGIN_FAILED while the login is still in flight on a slow connection,
+  // burning the IRCTC login-attempt budget on a pointless retry.
+  var settled = false;
+  for (var w = 0; w < 11; w++) {
+    await sleep(750);
+    if (captchaPresent()) { post('CAPTCHA_REQUIRED', {}); return false; }
+    if (!loginModal()) { settled = true; break; }
+  }
+  if (!settled) { post('LOGIN_FAILED', {}); return false; }
+  dropCredentials();
   return stepOk('submitLogin');
 }
+// Best-effort hygiene (audit #36): once the login attempt has concluded, the
+// credentials are no longer needed by any later step (only from/to/date/
+// class/quota are used from here on), so drop them from the page JS heap.
+function dropCredentials(){ PLAN.username = null; PLAN.password = null; }
 
 // ---------- search-form helpers ----------
 function findStationInput(which){

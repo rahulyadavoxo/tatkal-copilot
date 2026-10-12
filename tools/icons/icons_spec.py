@@ -1,0 +1,68 @@
+import math
+SW=2.0
+def L(x1,y1,x2,y2): return ('L',x1,y1,x2,y2)
+def C(cx,cy,r): return ('C',cx,cy,r)
+def CF(cx,cy,r): return ('CF',cx,cy,r)
+def R(x,y,w,h,rad): return ('R',x,y,w,h,rad)
+def A(cx,cy,r,sides,rot=0): return ('A',cx,cy,r,tuple(sides),rot)
+SIDE_C={'right':0,'bottom':90,'left':180,'top':270}
+def arc_ends(cx,cy,r,sides,rot):
+    # returns visible angular spans (start,end) in screen degrees
+    return [((SIDE_C[s]-45+rot),(SIDE_C[s]+45+rot)) for s in sides]
+def pt(cx,cy,r,a):
+    return (cx+r*math.cos(math.radians(a)), cy+r*math.sin(math.radians(a)))
+def arrow_at(cx,cy,r,ang,direction,size=4.2,spread=42):
+    """arrowhead at arc point angle ang; direction +1 = travel clockwise(increasing angle)"""
+    ex,ey=pt(cx,cy,r,ang)
+    # tangent for increasing angle in screen coords: (-sin, cos)
+    tx,ty=-math.sin(math.radians(ang))*direction, math.cos(math.radians(ang))*direction
+    out=[]
+    for s in (spread,-spread):
+        a=math.atan2(-ty,-tx)+math.radians(s)
+        out.append(L(round(ex,2),round(ey,2),round(ex+size*math.cos(a),2),round(ey+size*math.sin(a),2)))
+    return out
+def rays(cx,cy,r1,r2,n=8,off=0):
+    o=[]
+    for i in range(n):
+        a=math.radians(off+i*360/n)
+        o.append(L(round(cx+r1*math.cos(a),2),round(cy+r1*math.sin(a),2),round(cx+r2*math.cos(a),2),round(cy+r2*math.sin(a),2)))
+    return o
+
+ICONS={
+ 'home':[L(3,11,12,3.5),L(12,3.5,21,11),L(5,9.5,5,20),L(19,9.5,19,20),L(5,20,19,20),L(9.75,20,9.75,14.5),L(14.25,20,14.25,14.5),L(9.75,14.5,14.25,14.5)],
+ 'ticket':[R(3,6,18,12,3),L(15,8.5,15,9),L(15,11.75,15,12.25),L(15,15,15,15.5)],
+ 'train':[R(5,3,14,14,4),L(5,10,19,10),CF(9,13.5,1.25),CF(15,13.5,1.25),L(8.5,17.5,6.5,21),L(15.5,17.5,17.5,21),L(10,6.5,14,6.5)],
+ 'users':[C(17,6.5,2.5),A(17,17.5,4.5,['top','left'],45),C(8.5,9.5,3.5),A(8.5,20.5,6,['top','left'],45)],
+ 'bell':[A(12,10,6,['top','left'],45),L(6,10,6,16.5),L(18,10,18,16.5),L(4,17,20,17),L(10,20.5,14,20.5)],
+ 'shield':[L(4.5,5.5,12,2.75),L(12,2.75,19.5,5.5),L(4.5,5.5,4.5,11.5),L(19.5,5.5,19.5,11.5),L(4.5,11.5,12,21.25),L(19.5,11.5,12,21.25)],
+ 'settings':[C(12,12,7),CF(12,12,2.5),L(12,5,12,2.5),L(16.95,7.05,18.72,5.28),L(19,12,21.5,12),L(16.95,16.95,18.72,18.72),L(12,19,12,21.5),L(7.05,16.95,5.28,18.72),L(5,12,2.5,12),L(7.05,7.05,5.28,5.28)],
+ 'search':[C(11,11,6.5),L(16,16,20.5,20.5)],
+ 'plus':[L(12,5,12,19),L(5,12,19,12)],
+ 'minus':[L(5,12,19,12)],
+ 'x':[L(6,6,18,18),L(18,6,6,18)],
+ 'check':[L(5,12.5,9.5,17),L(9.5,17,19,7)],
+ 'chevronRight':[L(9,6,15,12),L(15,12,9,18)],
+ 'chevronLeft':[L(15,6,9,12),L(9,12,15,18)],
+ 'chevronDown':[L(6,9,12,15),L(12,15,18,9)],
+ 'arrowLeft':[L(5,12,19,12),L(5,12,11,6),L(5,12,11,18)],
+ 'arrowRight':[L(5,12,19,12),L(19,12,13,6),L(19,12,13,18)],
+ 'clock':[C(12,12,9),L(12,7,12,12),L(12,12,15.5,14)],
+ 'calendar':[R(3.5,5,17,16,3),L(3.5,10,20.5,10),L(8,3,8,7),L(16,3,16,7)],
+ 'mapPin':[A(12,9.5,7,['top','left','right']),L(16.95,14.45,12,21.5),L(7.05,14.45,12,21.5),C(12,9.5,2.5)],
+ 'eye':[A(12,19.4,10.5,['top']),A(12,4.6,10.5,['bottom']),C(12,12,3)],
+ 'eyeOff':[A(12,19.4,10.5,['top']),A(12,4.6,10.5,['bottom']),C(12,12,3),L(4,4,20,20)],
+ 'trash':[L(4,6.5,20,6.5),L(9.5,6.5,9.5,3.5),L(9.5,3.5,14.5,3.5),L(14.5,3.5,14.5,6.5),L(6,6.5,7,20.5),L(18,6.5,17,20.5),L(7,20.5,17,20.5),L(10,10.5,10,16.5),L(14,10.5,14,16.5)],
+ 'edit':[L(16.5,4.5,19.5,7.5),L(16.5,4.5,6,15),L(19.5,7.5,9,18),L(6,15,4.5,19.5),L(9,18,4.5,19.5),L(14,7,17,10)],
+ 'alertTriangle':[L(12,3.5,21.5,20),L(21.5,20,2.5,20),L(2.5,20,12,3.5),L(12,9.5,12,13.5),CF(12,16.75,1.25)],
+ 'info':[C(12,12,9),L(12,11,12,16.5),CF(12,7.75,1.25)],
+ 'helpCircle':[C(12,12,9),A(12,9.5,2.75,['top','right'],-20),L(14.49,10.66,12,12.5),L(12,12.5,12,13.5),CF(12,16.75,1.25)],
+ 'wifiOff':[A(12,19,4.5,['top']),A(12,19,9,['top']),A(12,19,13.5,['top']),CF(12,19,1.25),L(4,4,20,20)],
+ 'history':[A(12,12,9,['right','bottom','left'],-25),L(3.54,8.92,3.54,4.4),L(3.54,8.92,8.0,8.92),L(12,7.5,12,12),L(12,12,15,14)],
+ 'refresh':[A(12,12,9,['right','bottom','left'],25),L(20.46,8.92,20.46,4.4),L(20.46,8.92,16.0,8.92)],
+ 'card':[R(2.5,5,19,14,3),L(2.5,10,21.5,10),L(6,15,9,15)],
+ 'logout':[L(10,4,5,4),L(5,4,5,20),L(5,20,10,20),L(10,12,20,12),L(20,12,16,8),L(20,12,16,16)],
+ 'moon':[A(12,12,8,['top','bottom','left'],0)],
+ 'sun':[C(12,12,4)]+rays(12,12,7,9.5,8,0),
+ 'lock':[R(5,11,14,10,2.5),A(12,8,4,['top','left'],45),L(8,8,8,11),L(16,8,16,11),L(12,15,12,17)],
+ 'externalLink':[L(10,6,5,6),L(5,6,5,19),L(5,19,18,19),L(18,19,18,14),L(14,4,20,4),L(20,4,20,10),L(20,4,11,13)],
+}

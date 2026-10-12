@@ -9,8 +9,20 @@ web-build/
 # Native debug outputs (never commit)
 *.log
 
+# audit #48: the Expo debug keystore is committed historically, but it must
+# not be tracked going forward (publicly-known password). The file stays on
+# disk; only future changes are ignored. EAS production builds use remote
+# managed credentials.
+android/app/debug.keystore
+
 # macOS / editors
 .DS_Store
 
 # Keep android/ committed: EAS uses the prebuilt native project as-is
 # Keep eas.json, app.json, assets/ committed
+
+# Signing keystore for GitHub Actions builds (Expo-managed key, never commit)
+.secrets/
+
+# Local backup dirs
+node_modules.bak/

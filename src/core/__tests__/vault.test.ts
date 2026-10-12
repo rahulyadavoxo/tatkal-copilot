@@ -69,4 +69,64 @@ describe('vault (G3)', () => {
     expect(Array.from(nonceBytes)).toEqual(Array(12).fill(9));
     expect(await vault.decryptJSON(env)).toEqual({ x: 1 });
   });
+
+  describe('slot binding / AAD (audit #29)', () => {
+    test('slot-bound roundtrip works and envelope format is unchanged', async () => {
+      const vault = createVault({ getKey: async () => keyOf(11) }, undefined, 'tatkal-passengers-v1');
+      const env = await vault.encryptJSON({ name: 'Asha Yadav' });
+      expect(env.startsWith('v1.')).toBe(true);
+      expect(env.split('.')).toHaveLength(3);
+      expect(await vault.decryptJSON(env)).toEqual({ name: 'Asha Yadav' });
+    });
+
+    test('envelope transplanted to another slot fails authentication', async () => {
+      const vA = createVault({ getKey: async () => keyOf(12) }, undefined, 'slot-a');
+      const vB = createVault({ getKey: async () => keyOf(12) }, undefined, 'slot-b');
+      const env = await vA.encryptJSON({ secret: true });
+      await expect(vB.decryptJSON(env)).rejects.toThrow();
+    });
+
+    test('legacy (pre-AAD) envelope decrypts with upgrade flag, then re-encrypts bound', async () => {
+      const key = { getKey: async () => keyOf(13) };
+      const legacy = createVault(key); // no slot = legacy behavior
+      const env = await legacy.encryptJSON({ name: 'Asha Yadav' });
+
+      const bound = createVault(key, undefined, 'tatkal-trips-v1');
+      const first = await bound.decryptJSONWithUpgrade(env);
+      expect(first.value).toEqual({ name: 'Asha Yadav' });
+      expect(first.upgraded).toBe(true);
+
+      // Self-healing: re-encrypt and the bound vault reads it back cleanly.
+      const rewritten = await bound.encryptJSON(first.value);
+      const second = await bound.decryptJSONWithUpgrade(rewritten);
+      expect(second.value).toEqual({ name: 'Asha Yadav' });
+      expect(second.upgraded).toBe(false);
+    });
+
+    test('tampered slot-bound envelope still throws (no downgrade bypass)', async () => {
+      const vault = createVault({ getKey: async () => keyOf(14) }, undefined, 'tatkal-pnrs-v1');
+      const env = await vault.encryptJSON({ secret: true });
+      const tampered = env.slice(0, -4) + 'AAAA';
+      await expect(vault.decryptJSON(tampered)).rejects.toThrow();
+    });
+
+    test('wrong key fails even on the legacy fallback path', async () => {
+      const v1 = createVault({ getKey: async () => keyOf(15) });
+      const v2 = createVault({ getKey: async () => keyOf(16) }, undefined, 'slot-x');
+      const env = await v1.encryptJSON({ secret: true });
+      await expect(v2.decryptJSON(env)).rejects.toThrow();
+    });
+  });
+
+  describe('base64 validation (audit #33)', () => {
+    test('non-multiple-of-4 envelope segment rejected with a clear error', async () => {
+      const vault = createVault({ getKey: async () => keyOf(17) });
+      await expect(vault.decryptJSON('v1.AAA.QUJD')).rejects.toThrow('malformed envelope');
+    });
+
+    test('envelope version tag still enforced', async () => {
+      const vault = createVault({ getKey: async () => keyOf(18) });
+      await expect(vault.decryptJSON('v2.QUJD.QUJD')).rejects.toThrow('malformed envelope');
+    });
+  });
 });

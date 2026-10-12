@@ -16,6 +16,12 @@ import * as Crypto from 'expo-crypto';
 import { createVault, type KeyProvider, type Rng } from './core/vault';
 
 const VAULT_KEY_ITEM = 'tatkal-vault-key';
+// audit #30: ONE key for the app's lifetime — no rotation. The `v1` envelope
+// tag versions the format, not the key. If the key ever leaks, the only
+// remediation today is uninstall/reinstall (which generates a fresh key and
+// loses the old data — audit #32). Rotation is future work, not designed in.
+// audit #32: key + envelopes live in app-private SecureStore; uninstall wipes
+// them with NO recovery. Users must re-enter everything after reinstall.
 const PASSENGERS_ITEM = 'tatkal-passengers-v1';
 const TRIPS_ITEM = 'tatkal-trips-v1';
 const PNRS_ITEM = 'tatkal-pnrs-v1';
@@ -30,6 +36,10 @@ export interface Passenger {
   age: number;
   gender: Gender;
   berthPref: string; // 'LB' | 'MB' | 'UB' | 'SL' | 'SU' | 'WS'
+  /** Meal choice for IRCTC's mandatory catering dropdown on premium trains
+   *  ('Veg' | 'Non Veg' | 'Jain Meal' | 'Veg (Diabetic)' | 'Non Veg (Diabetic)').
+   *  Optional — older saved passengers simply default to 'Veg' at fill time. */
+  mealPref?: string;
 }
 
 export interface Trip {
@@ -59,6 +69,23 @@ export interface Trip {
    *  taps "Pay & Book" and STOPS — the user pays by hand on the gateway. */
   paymentProvider: PaymentProvider;
   createdAt: number;
+}
+
+/**
+ * The passengers a trip will actually book.
+ *
+ * A trip uses its explicitly linked passengers when they still exist in the
+ * vault (the TripSetup picker). Otherwise it falls back to the saved
+ * passengers (Tatkal PNR cap: 4) — so a traveller saved once is usable on
+ * every trip without re-linking, and deleting a passenger can't strand a
+ * trip on a dangling id.
+ */
+export function resolveTripPassengers(trip: Trip, all: Passenger[]): Passenger[] {
+  const linked = trip.passengerIds
+    .map((id) => all.find((p) => p.id === id))
+    .filter((p): p is Passenger => !!p);
+  if (linked.length > 0) return linked;
+  return all.slice(0, 4);
 }
 
 /** Payment-mode preference saved on the trip (review-page radio). */
@@ -121,13 +148,19 @@ function bytesToB64(bytes: Uint8Array): string {
 
 function b64ToBytes(s: string): Uint8Array {
   const clean = s.replace(/[^A-Za-z0-9+/=]/g, '');
+  if (clean.length === 0 || clean.length % 4 !== 0) {
+    throw new Error('vaultStore: malformed envelope (bad base64 length)');
+  }
   const out: number[] = [];
   for (let i = 0; i < clean.length; i += 4) {
-    const n =
-      (B64.indexOf(clean[i]) << 18) |
-      (B64.indexOf(clean[i + 1]) << 12) |
-      ((clean[i + 2] === '=' ? 0 : B64.indexOf(clean[i + 2])) << 6) |
-      (clean[i + 3] === '=' ? 0 : B64.indexOf(clean[i + 3]));
+    const a = B64.indexOf(clean[i]);
+    const b = B64.indexOf(clean[i + 1]);
+    const c = clean[i + 2] === '=' ? 0 : B64.indexOf(clean[i + 2]);
+    const d = clean[i + 3] === '=' ? 0 : B64.indexOf(clean[i + 3]);
+    if (a < 0 || b < 0 || c < 0 || d < 0) {
+      throw new Error('vaultStore: malformed envelope (bad base64 data)');
+    }
+    const n = (a << 18) | (b << 12) | (c << 6) | d;
     out.push((n >> 16) & 255);
     if (clean[i + 2] !== '=') out.push((n >> 8) & 255);
     if (clean[i + 3] !== '=') out.push(n & 255);
@@ -137,8 +170,16 @@ function b64ToBytes(s: string): Uint8Array {
 
 // ---------------------------------------------------------------------------
 // Key provider (the KeyProvider shape from src/core/vault.ts)
+//
+// SECURITY BOUNDARY (audit #34): the 32-byte key is generated once from
+// expo-crypto's native CSPRNG and stored in expo-secure-store. There is NO
+// KDF and NO passphrase/PIN/biometric gate: whoever holds the unlocked
+// device (or a rooted device) gets the key. The real boundary is the device
+// unlock + the OS keystore — not anything the user knows or is. An app lock
+// (PIN/biometric) is a PENDING PRODUCT DECISION (audit #35), deliberately
+// not built unprompted.
 // ---------------------------------------------------------------------------
-let cachedKey: Uint8Array | null = null;
+let cachedKey: Uint8Array | null = null; // audit #31: raw key stays in process memory for the app's lifetime (accepted tradeoff for speed)
 
 /** Returns the KeyProvider used by every vault operation in the app. */
 export function getVaultKeyProvider(): KeyProvider {
@@ -169,41 +210,50 @@ export function getVaultKeyProvider(): KeyProvider {
 // Device RNG: expo-crypto's native secure random (works on Hermes).
 const deviceRng: Rng = (n: number) => Crypto.getRandomBytesAsync(n);
 
-const vault = () => createVault(getVaultKeyProvider(), deviceRng);
+// Each collection gets its own slot-bound vault: the slot name is AES-GCM
+// AAD, so an envelope transplanted into another slot fails authentication
+// (audit #29). `loadSlot` self-heals legacy (pre-AAD) envelopes by
+// re-encrypting them on first read.
+const vaultFor = (slot: string) => createVault(getVaultKeyProvider(), deviceRng, slot);
+
+async function loadSlot<T>(slot: string): Promise<T | null> {
+  const envelope = await SecureStore.getItemAsync(slot);
+  if (!envelope) return null;
+  const v = vaultFor(slot);
+  const { value, upgraded } = await v.decryptJSONWithUpgrade<T>(envelope);
+  if (upgraded) {
+    await SecureStore.setItemAsync(slot, await v.encryptJSON(value));
+  }
+  return value;
+}
 
 // ---------------------------------------------------------------------------
 // Encrypted collections
 // ---------------------------------------------------------------------------
 export async function loadPassengers(): Promise<Passenger[]> {
-  const envelope = await SecureStore.getItemAsync(PASSENGERS_ITEM);
-  if (!envelope) return [];
-  return vault().decryptJSON<Passenger[]>(envelope);
+  return (await loadSlot<Passenger[]>(PASSENGERS_ITEM)) ?? [];
 }
 
 export async function savePassengers(list: Passenger[]): Promise<void> {
-  const envelope = await vault().encryptJSON(list);
+  const envelope = await vaultFor(PASSENGERS_ITEM).encryptJSON(list);
   await SecureStore.setItemAsync(PASSENGERS_ITEM, envelope);
 }
 
 export async function loadTrips(): Promise<Trip[]> {
-  const envelope = await SecureStore.getItemAsync(TRIPS_ITEM);
-  if (!envelope) return [];
-  return vault().decryptJSON<Trip[]>(envelope);
+  return (await loadSlot<Trip[]>(TRIPS_ITEM)) ?? [];
 }
 
 export async function saveTrips(list: Trip[]): Promise<void> {
-  const envelope = await vault().encryptJSON(list);
+  const envelope = await vaultFor(TRIPS_ITEM).encryptJSON(list);
   await SecureStore.setItemAsync(TRIPS_ITEM, envelope);
 }
 
 export async function loadPnrs(): Promise<TrackedPnr[]> {
-  const envelope = await SecureStore.getItemAsync(PNRS_ITEM);
-  if (!envelope) return [];
-  return vault().decryptJSON<TrackedPnr[]>(envelope);
+  return (await loadSlot<TrackedPnr[]>(PNRS_ITEM)) ?? [];
 }
 
 export async function savePnrs(list: TrackedPnr[]): Promise<void> {
-  const envelope = await vault().encryptJSON(list);
+  const envelope = await vaultFor(PNRS_ITEM).encryptJSON(list);
   await SecureStore.setItemAsync(PNRS_ITEM, envelope);
 }
 
@@ -223,14 +273,12 @@ export interface IrctcCredentials {
 }
 
 export async function saveIrctcCredentials(creds: IrctcCredentials): Promise<void> {
-  const envelope = await vault().encryptJSON(creds);
+  const envelope = await vaultFor(CREDENTIALS_ITEM).encryptJSON(creds);
   await SecureStore.setItemAsync(CREDENTIALS_ITEM, envelope);
 }
 
 export async function loadIrctcCredentials(): Promise<IrctcCredentials | null> {
-  const envelope = await SecureStore.getItemAsync(CREDENTIALS_ITEM);
-  if (!envelope) return null;
-  return vault().decryptJSON<IrctcCredentials>(envelope);
+  return loadSlot<IrctcCredentials>(CREDENTIALS_ITEM);
 }
 
 export async function clearIrctcCredentials(): Promise<void> {
@@ -247,10 +295,8 @@ export interface Prefs {
 }
 
 export async function loadPrefs(): Promise<Prefs> {
-  const envelope = await SecureStore.getItemAsync(PREFS_ITEM);
-  if (!envelope) return { language: 'en' };
   try {
-    const p = await vault().decryptJSON<Prefs>(envelope);
+    const p = await loadSlot<Prefs>(PREFS_ITEM);
     return p && (p.language === 'hi' || p.language === 'en') ? p : { language: 'en' };
   } catch {
     return { language: 'en' };
@@ -258,6 +304,6 @@ export async function loadPrefs(): Promise<Prefs> {
 }
 
 export async function savePrefs(prefs: Prefs): Promise<void> {
-  const envelope = await vault().encryptJSON(prefs);
+  const envelope = await vaultFor(PREFS_ITEM).encryptJSON(prefs);
   await SecureStore.setItemAsync(PREFS_ITEM, envelope);
 }

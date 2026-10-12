@@ -20,7 +20,7 @@
  *   never references Book Now / Pay buttons, never submits a form, never
  *   solves CAPTCHA/OTP (both halt it).
  * - scanReviewForViolations asserts all of the above on the generated
- *   source.
+ *   source in CI (test-time check, not a runtime guard).
  */
 import { findSubmitPatterns } from './fillEngine';
 
@@ -91,7 +91,7 @@ var PLAN = ${planJson};
 var SEED = ${seed};
 var log = (window.__tatkalEventLog = window.__tatkalEventLog || []);
 function post(type, data){
-  var e = { type: type, t: Math.round(performance.now()), data: data || {} };
+  var e = { type: type, t: Math.round(performance.now()), seed: SEED, data: data || {} };
   log.push(e);
   try {
     if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
@@ -165,51 +165,181 @@ function guard(){
   return true;
 }
 // ---------- step 1: co-branded card "Skip" must be selected ----------
+var COBRAND_HINT = /co-brand|sbi.{0,10}card|loyalty.{0,30}card|card.{0,30}offer|pay less.{0,20}earn/i;
+function sectionHint(el){
+  return COBRAND_HINT.test(norm(sectionText(el)));
+}
+function cobrandOfferPresent(){
+  // A real card-offer OPTION GROUP: visible container with co-brand wording
+  // AND at least one option radio. A promo banner ("IRCTC SBI Card") with no
+  // radios is not an option group — nothing to skip there.
+  var els = document.querySelectorAll('div, section, fieldset, form, table');
+  for (var i = 0; i < els.length; i++) {
+    if (!visible(els[i])) continue;
+    var t = '';
+    try { t = els[i].innerText || ''; } catch (e) {}
+    if (!t) continue;
+    var n = norm(t.length > 500 ? t.slice(0, 500) : t);
+    if (!COBRAND_HINT.test(n)) continue;
+    if (/bhim|credit & debit cards/.test(n)) continue; // payment-mode list, not card offer
+    var rs = els[i].querySelectorAll('input[type="radio"]');
+    for (var k = 0; k < rs.length; k++) {
+      if (!visible(rs[k])) continue;
+      var rt = norm(ownText(rs[k]));
+      if (/bhim|credit & debit cards/.test(rt)) continue; // a payment radio
+      return true;
+    }
+  }
+  return false;
+}
+function cardGroupText(){
+  // Diagnostic for the halt notice: what the card-offer group actually says,
+  // so the wording on the real IRCTC page can be seen and matched.
+  var els = document.querySelectorAll('div, section, fieldset, form, table');
+  for (var i = 0; i < els.length; i++) {
+    if (!visible(els[i])) continue;
+    var t = '';
+    try { t = els[i].innerText || ''; } catch (e) {}
+    if (!t) continue;
+    var n = norm(t.length > 500 ? t.slice(0, 500) : t);
+    if (!COBRAND_HINT.test(n)) continue;
+    if (/bhim|credit & debit cards/.test(n)) continue;
+    return 'On-page section: "' + n.slice(0, 140) + '"';
+  }
+  return '';
+}
 async function stepSkipCard(){
   var radios = document.querySelectorAll('input[type="radio"]');
-  var skip = null, any = null;
+  var skip = null;
   for (var i = 0; i < radios.length; i++) {
     if (!visible(radios[i])) continue;
     var own = norm(ownText(radios[i]));
     if (own.indexOf('skip') === -1) continue;
     var sec = norm(sectionText(radios[i]));
     if (sec.indexOf('co-brand') !== -1 || sec.indexOf('loyalty') !== -1 || sec.indexOf('reward') !== -1 ||
-        sec.indexOf('pay less, earn more') !== -1) { skip = radios[i]; break; }
-    if (!any) any = radios[i];
+        sec.indexOf('pay less, earn more') !== -1 || sec.indexOf('sbi card') !== -1) { skip = radios[i]; break; }
+    // A "Skip" radio outside the co-branded/loyalty section is NOT ours
+    // (e.g. a meal or seat "Skip") — it must never be clicked; halt instead.
   }
-  if (!skip) skip = any; // label match on "Skip" alone (section text nearby)
-  if (!skip) return stepMissing('skipCard', 'Skip option not found');
-  if (skip.checked) return stepOk('skipCard', { skipped: true, reason: 'already-selected' });
-  clickEl(skip);
-  await sleep(500);
-  if (!skip.checked) { try { skip.checked = true; } catch (e) {} }
-  return stepOk('skipCard');
+  if (skip) {
+    if (skip.checked) return stepOk('skipCard', { skipped: true, reason: 'already-selected' });
+    clickEl(skip);
+    await sleep(500);
+    if (!skip.checked) { try { skip.checked = true; } catch (e) {} }
+    return stepOk('skipCard');
+  }
+  // Variant: the card offer's Skip is a button/link rather than a radio.
+  var ctrls = document.querySelectorAll('button, a, input[type="button"], input[type="submit"]');
+  for (var j = 0; j < ctrls.length; j++) {
+    var el = ctrls[j], tag = (el.tagName || '').toLowerCase();
+    if (!visible(el)) continue;
+    var bt = tag === 'input' ? norm(el.getAttribute('value') || '')
+                             : norm(el.innerText || el.textContent || '');
+    if (bt.indexOf('skip') === -1 || bt.indexOf('continue') !== -1) continue;
+    if (sectionHint(el)) { clickEl(el); await sleep(500); return stepOk('skipCard', { via: 'button' }); }
+  }
+  // Variant: this IRCTC page shows no card-offer option group at all — nothing
+  // to skip, so move on to the payment mode and Continue instead of halting.
+  if (!cobrandOfferPresent()) return stepOk('skipCard', { skipped: true, reason: 'no-card-section' });
+  var diag = cardGroupText();
+  return stepMissing('skipCard', 'Skip option not found in co-branded card section' + (diag ? ' (' + diag + ')' : ''));
 }
 // ---------- step 2: GST — deliberately untouched (no GSTIN is collected) ----------
 async function stepGst(){
   return stepOk('gst', { skipped: true, reason: 'optional-no-gstin-saved' });
 }
 // ---------- step 3: payment mode — honour the trip's choice, never pay ----------
+function optionText(el){
+  // Text of one option row: associated labels, wrapping label, aria-label,
+  // then the row's own text. IRCTC renders radios as custom controls on some
+  // variants, so the native input's label association alone is not enough.
+  var parts = [ownText(el)];
+  try {
+    var l = el.closest ? el.closest('label') : null;
+    if (l) parts.push(l.innerText || '');
+  } catch (e) {}
+  try {
+    var row = el.parentElement;
+    if (row) parts.push(row.innerText || '');
+    var row2 = row && row.parentElement;
+    if (row2) {
+      var t2 = row2.innerText || '';
+      parts.push(t2.length > 300 ? t2.slice(0, 300) : t2);
+    }
+  } catch (e2) {}
+  return norm(parts.join(' | '));
+}
+function ownOptionText(el){
+  // The option's OWN text only (no ancestors): used for the skip filter, so a
+  // "Skip" word elsewhere on the page (e.g. the co-branded card section above
+  // the payment options) can never hide the payment radios. For custom
+  // (non-input) controls the element's own inner text counts too.
+  var parts = [ownText(el)];
+  try {
+    var l = el.closest ? el.closest('label') : null;
+    if (l) parts.push(l.innerText || '');
+  } catch (e) {}
+  try {
+    var tag = (el.tagName || '').toLowerCase();
+    if (tag !== 'input' && tag !== 'select' && tag !== 'textarea') {
+      var self = el.innerText || el.textContent || '';
+      parts.push(self.length > 200 ? self.slice(0, 200) : self);
+    }
+  } catch (e2) {}
+  return norm(parts.join(' | '));
+}
+function payMatches(t, want){
+  if (want === 'bhim') return /bhim/.test(t) && /upi/.test(t);
+  if (want === 'cards') return /credit/.test(t) && /debit/.test(t);
+  return false;
+}
 function findPaymentRadio(want){
-  var radios = document.querySelectorAll('input[type="radio"]');
+  // Native radios AND custom role="radio" controls. Two passes: first the
+  // option's OWN text (precise — two options sharing a container must not be
+  // confused), then the wider row text as a fallback for text-less controls.
+  var radios = document.querySelectorAll('input[type="radio"], [role="radio"]');
+  var cands = [];
+  var fallbacks = [];
   for (var i = 0; i < radios.length; i++) {
-    if (!visible(radios[i])) continue;
-    var own2 = norm(ownText(radios[i]));
-    if (own2.indexOf('skip') !== -1) continue; // co-branded card radios, not payment
-    var t = own2 + ' ' + norm(sectionText(radios[i]));
-    if (want === 'bhim' && /bhim\\/upi/.test(t)) return radios[i];
-    if (want === 'cards' && /credit & debit cards/.test(t)) return radios[i];
+    var el = radios[i];
+    if (!visible(el)) continue;
+    var own = ownOptionText(el);
+    if (own.indexOf('skip') !== -1) continue; // co-branded card radios, not payment
+    var t = optionText(el);
+    cands.push(own.slice(0, 60) || t.slice(0, 60));
+    if (payMatches(own, want)) return el;
+    if (payMatches(t, want)) fallbacks.push(el);
   }
+  // Ancestor-text fallback: only when exactly one option matches — several
+  // matches means the options share a container and guessing could pick the
+  // wrong payment mode, so halt instead.
+  if (fallbacks.length === 1) return fallbacks[0];
+  window.__payCands = cands; // diagnostics for the halt notice
   return null;
+}
+function paySelected(el){
+  try {
+    if (typeof el.checked === 'boolean') return el.checked;
+    var a = el.getAttribute('aria-checked');
+    if (a !== null) return a === 'true';
+  } catch (e) {}
+  return false;
 }
 async function stepPayment(){
   var mode = PLAN.paymentMode || 'default';
   if (mode === 'default') return stepOk('payment', { skipped: true, reason: 'irctc-default-kept' });
   var r = findPaymentRadio(mode);
-  if (!r) return stepMissing('payment', 'payment option ' + mode + ' not found');
-  if (r.checked) return stepOk('payment', { skipped: true, reason: 'already-selected' });
+  if (!r) {
+    var c = [];
+    try { c = window.__payCands || []; } catch (e) {}
+    return stepMissing('payment', 'payment option ' + mode + ' not found' +
+      (c.length ? ' (saw ' + c.length + ' options: ' + c.join(' ~ ').slice(0, 160) + ')' : ' (no option radios found)'));
+  }
+  if (paySelected(r)) return stepOk('payment', { skipped: true, reason: 'already-selected' });
   clickEl(r);
   await sleep(500);
+  if (!paySelected(r)) { try { r.click(); } catch (e) {} await sleep(500); }
+  if (!paySelected(r)) return stepMissing('payment', 'payment option ' + mode + ' would not select');
   return stepOk('payment', { mode: mode });
 }
 // ---------- step 4: tap Continue — then STOP, payment is manual ----------
@@ -239,8 +369,29 @@ function exactButton(text){ return fuzzyButton(text); }
 async function stepContinue(){
   var btn = exactButton('Continue');
   if (!btn) return stepMissing('continueTap');
+  var beforeText = '';
+  try { beforeText = (document.body ? document.body.innerText : '').slice(0, 4000); } catch (e) {}
+  var beforeUrl = '';
+  try { beforeUrl = location.href; } catch (e) {}
   clickEl(btn);
-  await sleep(1200);
+  // Verify the page actually advanced: a fixed delay alone declares success
+  // even when the tap never registered, chaining payment onto the wrong page.
+  // No time limit — on slow connections IRCTC can take minutes to render the
+  // next page. Never re-tap: IRCTC kills the session on double-clicked
+  // buttons ("Sorry!!! Please Try again!!"). guard() still cancels the wait.
+  for (;;) {
+    await sleep(750);
+    if (!guard()) return false;
+    var url = '';
+    try { url = location.href; } catch (e) {}
+    if (url && beforeUrl && url !== beforeUrl) break;
+    var t = '';
+    try { t = (document.body ? document.body.innerText : '').slice(0, 4000); } catch (e) {}
+    if (t !== beforeText && /review journey|your ticket will be sent to|payment methods/i.test(t)) break;
+    var gone = false;
+    try { gone = !document.contains(btn); } catch (e) {}
+    if (gone && t !== beforeText) break;
+  }
   post('REVIEW_DONE', {});
   return true;
 }

@@ -95,4 +95,26 @@ describe('post-search script safety', () => {
     const commented = '/* never CAPTCHA-solving; detection for halting is fine */\n' + script;
     expect(scanPostSearchForViolations(commented)).toEqual([]);
   });
+
+  it('selects the availability box (date + marker), not the header date decoy', () => {
+    // Regression for the 2026-10-07 on-device failure: the old
+    // smallest-date matcher tapped the card header's journey date instead
+    // of the availability box, leaving Book Now disabled.
+    expect(script).toContain('findAvailabilityBox');
+    expect(script).toContain('availMarker');
+    expect(script).toContain('available|waiting|wl|rac|regret');
+  });
+
+  it('verifies Book Now is enabled before tapping, and halts loud if not', () => {
+    expect(script).toContain('bookNowEnabled');
+    expect(script).toContain('Book Now stayed disabled');
+  });
+
+  it('retries a Book Now tap that did not navigate, with real mouse events', () => {
+    expect(script).toContain('strongClick(rBook)');
+  });
+
+  it('handles dropdown-style availability selectors', () => {
+    expect(script).toContain('findOpenDateOption');
+  });
 });

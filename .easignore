@@ -1,0 +1,5 @@
+# EAS upload ignore — keeps `eas build` / `eas update` uploads small.
+# node_modules.bak is a 500MB+ local spare copy; never upload it.
+node_modules.bak/
+dist/
+.eas-build*.log

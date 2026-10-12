@@ -23,6 +23,11 @@
   .pay-option { display: block; border: 1px solid #999; border-radius: 8px; padding: 10px; margin: 6px 0; }
   .prov-option { border: 1px solid #999; border-radius: 8px; padding: 12px; margin: 6px 0; cursor: pointer; }
   .prov-option.selected { border-color: #f90; border-width: 2px; }
+  .avail-box { border: 1px solid #999; border-radius: 8px; padding: 10px 14px; margin: 4px; cursor: pointer; }
+  .avail-box.selected { border-color: #06c; border-width: 2px; }
+  .avail { color: #090; font-weight: bold; margin-left: 8px; }
+  .book-now:disabled { background: #ccc !important; color: #888 !important; }
+  .journey-date { font-weight: bold; }
   #paymentGateway { border: 3px dashed #090; padding: 24px; margin: 16px 0; font-weight: bold; }
   label { display: block; margin: 6px 0; }
 </style>
@@ -192,7 +197,7 @@
     <div class="sticky"><span>&#8377; 561.80</span> <button id="payContinueBtn">Continue</button></div>
   </div>
 
-  <!-- state 6: provider list -->
+  <!-- state 6: provider list (Multiple Payment Service aggregators) -->
   <div id="providerPage" style="display:none">
     <h2>Pay &amp; Book</h2>
     <div class="prov-option" data-name="payu">PayU</div>
@@ -200,6 +205,17 @@
     <div class="prov-option" data-name="phonepe">PhonePe</div>
     <div class="prov-option" data-name="razorpay">Razorpay</div>
     <div class="sticky"><span>&#8377; 561.80</span> <button id="payBookBtn">Pay &amp; Book</button></div>
+  </div>
+
+  <!-- state 6b: IRCTC iPay page (?ipaypage=1) — has "Pay & Book" but NO
+       aggregator provider list (on-device 2026-10-08) -->
+  <div id="ipayPage" style="display:none">
+    <h2>IRCTC iPay</h2>
+    <div>Choose your payment option</div>
+    <div class="ipay-option">Credit Card</div>
+    <div class="ipay-option">Debit Card</div>
+    <div class="ipay-option">UPI</div>
+    <div class="sticky"><span>&#8377; 561.80</span> <button id="ipayPayBookBtn">Pay &amp; Book</button></div>
   </div>
 
 <script>
@@ -222,9 +238,112 @@
     var pb = document.getElementById('payBookBtn');
     if (pb) pb.textContent = 'Pay and Book';
   })();
+
+  // ?nocobrand=1 — on-device 2026-10-08: the IRCTC page variant with no
+  // co-branded card offer section at all. The review script must skip the
+  // Skip step instead of halting, then pick the payment mode + Continue.
+  (function () {
+    if (new URLSearchParams(location.search).get('nocobrand') !== '1') return;
+    var cb = document.getElementById('cobrand');
+    if (cb) cb.parentNode.removeChild(cb);
+  })();
+
+  // ?sbbanner=1 — promo banner mentioning the SBI Card but with NO option
+  // radios (on-device guess 2026-10-08). It must NOT be treated as a
+  // card-offer option group: the review still completes.
+  (function () {
+    if (new URLSearchParams(location.search).get('sbbanner') !== '1') return;
+    var cb = document.getElementById('cobrand');
+    if (cb) cb.parentNode.removeChild(cb);
+    var b = document.createElement('div');
+    b.id = 'sbbanner';
+    b.innerHTML = '<strong>Get the IRCTC SBI Card</strong><div>Earn reward points on every booking. T&amp;C apply.</div>';
+    var pax = document.getElementById('paxPage');
+    if (pax) pax.insertBefore(b, pax.firstChild);
+  })();
+
+  // ?noskip=1 — card-offer option group present but NO skip control at all.
+  // The review must still halt here (never guess at card-offer controls).
+  (function () {
+    if (new URLSearchParams(location.search).get('noskip') !== '1') return;
+    var sr = document.getElementById('skipRadio');
+    if (sr && sr.parentNode) sr.parentNode.removeChild(sr);
+  })();
+
+  // ?customradio=1 — payment options as custom role="radio" controls with no
+  // native input (on-device guess 2026-10-08: the review found "payment
+  // option bhim not found" although the option was on screen). Clicking a
+  // control flips aria-checked like the real framework does.
+  (function () {
+    if (new URLSearchParams(location.search).get('customradio') !== '1') return;
+    function toDiv(label, id, on) {
+      var d = document.createElement('div');
+      d.className = 'payopt';
+      d.setAttribute('role', 'radio');
+      d.id = id;
+      d.setAttribute('aria-checked', on ? 'true' : 'false');
+      d.setAttribute('tabindex', '0');
+      d.style.cssText = 'padding:8px;border:1px solid #888;margin:4px 0;cursor:pointer';
+      d.textContent = label.textContent;
+      d.addEventListener('click', function () {
+        document.querySelectorAll('.payopt').forEach(function (x) { x.setAttribute('aria-checked', 'false'); });
+        d.setAttribute('aria-checked', 'true');
+      });
+      label.replaceWith(d);
+    }
+    var labels = document.querySelectorAll('#paxPage label');
+    labels.forEach(function (l) {
+      var inp = l.querySelector('input[name="paymode"]');
+      if (!inp) return;
+      toDiv(l, inp.id, inp.checked);
+    });
+  })();
 </script>
 
   <div id="paymentGateway" style="display:none">PAYMENT GATEWAY — everything from here is manual</div>
+
+<script>
+  // ?availbox=1 — on-device 2026-10-07 shape: the card header repeats the
+  // journey date (a decoy for naive smallest-date matchers), the
+  // availability is a dropdown-like box holding date + AVAILABLE marker,
+  // and Book Now starts disabled until the availability is selected.
+  (function () {
+    if (new URLSearchParams(location.search).get('availbox') !== '1') return;
+    window.__availBoxClicked = 0;
+    window.__bookEnabledAtTap = null;
+    var card = document.getElementById('card12873');
+    if (!card) return;
+    var head = card.querySelector('.train-name');
+    if (head) {
+      var decoy = document.createElement('div');
+      decoy.className = 'journey-line';
+      decoy.innerHTML = '19:02 <span class="journey-date">Tue, 29 Sep</span> — 13:10';
+      head.parentNode.insertBefore(decoy, head.nextSibling);
+    }
+    var dc = card.querySelector('.date-cards');
+    if (dc) {
+      var box = document.createElement('div');
+      box.className = 'avail-box';
+      box.setAttribute('role', 'button');
+      box.setAttribute('tabindex', '0');
+      box.innerHTML = '<span>Tue, 29 Sep</span><span class="avail">AVAILABLE-0136</span>';
+      box.addEventListener('click', function () {
+        window.__availBoxClicked++;
+        box.classList.add('selected');
+        var bn = card.querySelector('.book-now');
+        if (bn) bn.disabled = false;
+      });
+      dc.replaceWith(box);
+    }
+    var bn = card.querySelector('.book-now');
+    if (bn) {
+      bn.disabled = true;
+      bn.addEventListener('click', function () {
+        if (window.__bookEnabledAtTap === null) window.__bookEnabledAtTap = !bn.disabled;
+      }, true);
+    }
+  })();
+</script>
 
 <script>
   document.getElementById('searchBtn').addEventListener('click', function () {
@@ -286,8 +405,16 @@
   });
   document.getElementById('continueBtn').addEventListener('click', function () {
     window.__continueClicked++;
-    document.getElementById('paxPage').style.display = 'none';
-    document.getElementById('reviewJourneyPage').style.display = 'block';
+    // ?slowcontinue=1 — on-device 2026-10-08: IRCTC took >5s to render Review
+    // Journey on a slow connection; the review script must wait patiently
+    // instead of declaring "page did not advance". Now 35s (beyond the old
+    // 30s cap) to prove there is no time limit at all.
+    var show = function () {
+      document.getElementById('paxPage').style.display = 'none';
+      document.getElementById('reviewJourneyPage').style.display = 'block';
+    };
+    if (new URLSearchParams(location.search).get('slowcontinue') === '1') { setTimeout(show, 35000); }
+    else { show(); }
   });
   document.getElementById('reviewContinueBtn').addEventListener('click', function () {
     window.__reviewContinueClicked++;
@@ -296,11 +423,26 @@
   });
   Array.from(document.querySelectorAll('input[name="paymethod"]')).forEach(function (r) {
     r.addEventListener('change', function () { window.__payMethodSelected = r.value; });
+    // Clicking an already-checked radio fires no 'change' — record it anyway.
+    r.addEventListener('click', function () { window.__payMethodSelected = r.value; });
   });
   document.getElementById('payContinueBtn').addEventListener('click', function () {
     window.__payContinueClicked++;
     document.getElementById('payMethodsPage').style.display = 'none';
-    document.getElementById('providerPage').style.display = 'block';
+    // ?slowprovider=1 — on-device 2026-10-08: pages took far longer than the
+    // old ~20s cap on a slow connection; the engine must wait without a limit.
+    var showProvider = function () {
+      if (new URLSearchParams(location.search).get('ipaypage') === '1') {
+        document.getElementById('ipayPage').style.display = 'block';
+      } else {
+        document.getElementById('providerPage').style.display = 'block';
+      }
+    };
+    if (new URLSearchParams(location.search).get('slowprovider') === '1') {
+      setTimeout(showProvider, 25000);
+    } else {
+      showProvider();
+    }
   });
   Array.from(document.querySelectorAll('.prov-option')).forEach(function (d) {
     d.addEventListener('click', function () {
@@ -315,6 +457,10 @@
     window.__payBookClicked++;
     document.getElementById('paymentGateway').style.display = 'block';
   });
+  document.getElementById('ipayPayBookBtn').addEventListener('click', function () {
+    window.__payBookClicked++;
+    document.getElementById('paymentGateway').style.display = 'block';
+  });
   var startState = qs.get('state');
   if (startState === 'passenger' || startState === 'review' || startState === 'paymethods' || startState === 'providers') {
     document.getElementById('searchSection').style.display = 'none';
@@ -323,6 +469,12 @@
   if (startState === 'review') document.getElementById('reviewJourneyPage').style.display = 'block';
   if (startState === 'paymethods') document.getElementById('payMethodsPage').style.display = 'block';
   if (startState === 'providers') document.getElementById('providerPage').style.display = 'block';
+  // ?nophonepe=1 — the aggregator list exists but PhonePe is not offered: the
+  // engine must skip the provider step (not halt) and still reach the gateway.
+  if (new URLSearchParams(location.search).get('nophonepe') === '1') {
+    var pp = document.querySelector('.prov-option[data-name="phonepe"]');
+    if (pp && pp.parentNode) pp.parentNode.removeChild(pp);
+  }
 </script>
 </body>
 </html>

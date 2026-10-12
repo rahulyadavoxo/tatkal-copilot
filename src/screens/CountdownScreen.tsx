@@ -18,44 +18,59 @@
  * the user still sees the live IRCTC page and taps Fill themselves.
  */
 import React, { useEffect, useMemo, useState } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { C } from '../theme';
+import { Text, View } from 'react-native';
+import { useTheme } from '../theme';
+import {
+  Badge,
+  Card,
+  Countdown,
+  ErrorState,
+  GhostButton,
+  Icon,
+  PrimaryButton,
+  ReadinessCard,
+  Screen,
+  SecondaryButton,
+  ICON_SIZE,
+} from '../components/ui';
 import { TATKAL_TIMING } from '../timingConfig';
 import { msUntilTatkalOpen, tatkalBookingOpen } from '../core/timing';
 import { isTatkalQuota } from '../core/tatkalConfig';
-import { loadTrips, type Trip } from '../vaultStore';
+import { loadIrctcCredentials, loadTrips, type Trip } from '../vaultStore';
 import type { Nav } from '../App';
 
 const WARMUP_MS = 5 * 60 * 1000;
 const MISSED_AFTER_MS = 3 * 60 * 60 * 1000; // window realistically dead after ~3h
 
-function fmt(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  const d = Math.floor(total / 86400);
-  const h = Math.floor((total % 86400) / 3600);
-  const m = Math.floor((total % 3600) / 60);
-  const s = total % 60;
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return d > 0 ? `${d}d ${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(h)}:${pad(m)}:${pad(s)}`;
-}
-
 function istString(d: Date): string {
-  return d.toLocaleString('en-IN', {
-    timeZone: 'Asia/Kolkata',
-    day: '2-digit',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
+  // IST is UTC+5:30 with no DST — format manually from the UTC instant.
+  // (Hermes' Intl timeZone support is unreliable, so toLocaleString with
+  // timeZone: 'Asia/Kolkata' can't be trusted on-device.)
+  const ist = new Date(d.getTime() + 5.5 * 3600 * 1000);
+  const p = (n: number) => String(n).padStart(2, '0');
+  const months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+  return `${p(ist.getUTCDate())} ${months[ist.getUTCMonth()]} ${p(ist.getUTCHours())}:${p(ist.getUTCMinutes())}`;
 }
 
 export default function CountdownScreen({ nav, tripId }: { nav: Nav; tripId: string }) {
+  const { theme } = useTheme();
+  const ty = theme.typography;
   const [trip, setTrip] = useState<Trip | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [hasLogin, setHasLogin] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    void loadTrips().then((ts) => setTrip(ts.find((t) => t.id === tripId) ?? null));
+    void loadTrips().then((ts) => {
+      setTrip(ts.find((t) => t.id === tripId) ?? null);
+      setLoaded(true);
+    });
+    // Read-only readiness check for the "Get ready" checklist below —
+    // only a boolean is kept, never the credentials themselves.
+    void loadIrctcCredentials().then((c) => setHasLogin(!!c));
   }, [tripId]);
 
   useEffect(() => {
@@ -63,133 +78,264 @@ export default function CountdownScreen({ nav, tripId }: { nav: Nav; tripId: str
     return () => clearInterval(id);
   }, []);
 
-  const open = useMemo(
-    () => (trip ? tatkalBookingOpen(trip.journeyDate, trip.isAC, TATKAL_TIMING) : null),
-    [trip],
-  );
-  const msLeft =
-    trip && open
-      ? msUntilTatkalOpen(trip.journeyDate, trip.isAC, TATKAL_TIMING, new Date(now))
-      : null;
+  // Never let a malformed journeyDate throw during render (that would trip
+  // the app-level ErrorBoundary and silently dump the user at home).
+  const openResult = useMemo(() => {
+    if (!trip) return { open: null as Date | null, error: '' };
+    try {
+      return { open: tatkalBookingOpen(trip.journeyDate, trip.isAC, TATKAL_TIMING), error: '' };
+    } catch (e) {
+      return { open: null, error: e instanceof Error ? e.message : String(e) };
+    }
+  }, [trip]);
 
-  if (!trip || open === null || msLeft === null) {
+  if (!loaded) {
     return (
-      <View style={styles.root}>
-        <Text style={styles.muted}>Loading trip…</Text>
-      </View>
+      <Screen scroll={false} padded={false}>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <Text style={{ color: theme.colors.muted, fontSize: ty.body.size }}>Loading trip…</Text>
+        </View>
+      </Screen>
     );
   }
+
+  if (!trip) {
+    return (
+      <Screen>
+        <View style={{ flex: 1, justifyContent: 'center' }}>
+          <ErrorState
+            title="Trip not found"
+            message="This trip no longer exists — it may have been deleted."
+            onRetry={nav.back}
+            retryLabel="Back"
+            retryIcon="arrowLeft"
+          />
+        </View>
+      </Screen>
+    );
+  }
+
+  if (openResult.error || !openResult.open) {
+    return (
+      <Screen>
+        <View style={{ flex: 1, justifyContent: 'center' }}>
+          <ErrorState
+            title="Trip date is invalid"
+            message={`This trip's journey date couldn't be read (${openResult.error || 'unknown date'}). Edit the trip and pick the date from the calendar again.`}
+            onRetry={nav.back}
+            retryLabel="Back"
+            retryIcon="arrowLeft"
+          />
+        </View>
+      </Screen>
+    );
+  }
+
+  const tripCard = (
+    <Card variant="elevated" style={{ marginBottom: theme.spacing.md }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <View
+          style={{
+            width: 48,
+            height: 48,
+            borderRadius: 24,
+            backgroundColor: theme.colors.primaryTint,
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginRight: theme.spacing.md,
+          }}
+        >
+          <Icon name="train" size={ICON_SIZE.md} color={theme.colors.primaryOnTint} accessibilityLabel="Train" />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={{ fontSize: ty.h2.size, fontWeight: '800', color: theme.colors.ink }}>
+            {trip.trainNo}
+          </Text>
+          <Text style={{ fontSize: ty.bodySm.size, color: theme.colors.muted }}>
+            {trip.from} → {trip.to}
+          </Text>
+        </View>
+        <Badge label={trip.quota ?? 'TATKAL'} variant="primary" />
+      </View>
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          marginTop: theme.spacing.md,
+          paddingTop: theme.spacing.md,
+          borderTopWidth: 1,
+          borderTopColor: theme.colors.line,
+        }}
+      >
+        <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+          <Icon name="calendar" size={ICON_SIZE.xs} color={theme.colors.muted} />
+          <Text style={{ marginLeft: 4, fontSize: ty.bodySm.size, color: theme.colors.muted }}>
+            {trip.journeyDate}
+          </Text>
+        </View>
+        <Text style={{ fontSize: ty.bodySm.size, fontWeight: '700', color: theme.colors.ink, marginRight: theme.spacing.md }}>
+          {trip.classCode}
+        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <Icon name="users" size={ICON_SIZE.xs} color={theme.colors.muted} />
+          <Text style={{ marginLeft: 4, fontSize: ty.bodySm.size, color: theme.colors.muted }}>
+            {trip.passengerIds.length} pax
+          </Text>
+        </View>
+      </View>
+    </Card>
+  );
 
   // Non-Tatkal quotas: no countdown, no FIRE wait — book straight away.
   if (!isTatkalQuota(trip.quota)) {
     return (
-      <View style={styles.root}>
-        <Text style={styles.title}>
-          {trip.trainNo} · {trip.from} → {trip.to}
-        </Text>
-        <Text style={styles.sub}>
-          {trip.journeyDate} · {trip.classCode} · {trip.quota} ·{' '}
-          {trip.passengerIds.length} pax
-        </Text>
-        <Text style={styles.sub}>No Tatkal window for this quota — book anytime.</Text>
+      <Screen>
+        <View style={{ flex: 1, justifyContent: 'center' }}>
+          {tripCard}
+          <Text
+            style={{
+              color: theme.colors.muted,
+              fontSize: ty.bodySm.size,
+              textAlign: 'center',
+              marginBottom: theme.spacing.lg,
+            }}
+          >
+            No Tatkal window for this quota — book anytime.
+          </Text>
 
-        <TouchableOpacity
-          style={styles.fire}
-          onPress={() => nav.go({ name: 'booking', tripId })}
-        >
-          <Text style={styles.fireText}>🎫 Book now — open IRCTC booking</Text>
-        </TouchableOpacity>
+          <PrimaryButton
+            title="Book now — open IRCTC booking"
+            icon="ticket"
+            size="lg"
+            fullWidth
+            accessibilityLabel={`Book now — open IRCTC booking for train ${trip.trainNo}`}
+            onPress={() => nav.go({ name: 'booking', tripId })}
+          />
 
-        <TouchableOpacity style={styles.back} onPress={nav.back}>
-          <Text style={styles.backText}>← Back</Text>
-        </TouchableOpacity>
-      </View>
+          <GhostButton
+            icon="arrowLeft"
+            title="Back"
+            accessibilityLabel="Go back"
+            onPress={nav.back}
+            fullWidth
+            style={{ marginTop: theme.spacing.sm }}
+          />
+        </View>
+      </Screen>
     );
   }
+
+  const open = openResult.open;
+  const msLeft = msUntilTatkalOpen(trip.journeyDate, trip.isAC, TATKAL_TIMING, new Date(now));
 
   const isOpen = msLeft <= 0;
   const missed = msLeft < -MISSED_AFTER_MS;
   const showWarmup = !isOpen && msLeft <= WARMUP_MS;
 
+  // Window-state copy for the countdown's state line.
+  const windowState: 'far' | 'soon' | 'final' | 'open' =
+    isOpen ? 'open' : msLeft <= 60_000 ? 'final' : msLeft <= 10 * 60_000 ? 'soon' : 'far';
+  const stateCopy = {
+    far: { text: 'Still a while to go — your trip is prepared', variant: 'info' as const },
+    soon: { text: 'Under 10 minutes — get ready', variant: 'warn' as const },
+    final: { text: 'Under a minute — stay on this screen', variant: 'warn' as const },
+    open: { text: 'Window open — this is your final action on IRCTC', variant: 'success' as const },
+  }[windowState];
+
   return (
-    <View style={styles.root}>
-      <Text style={styles.title}>
-        {trip.trainNo} · {trip.from} → {trip.to}
-      </Text>
-      <Text style={styles.sub}>
-        {trip.journeyDate} · {trip.classCode} · {trip.quota} ·{' '}
-        {trip.passengerIds.length} pax
-      </Text>
-      <Text style={styles.sub}>Window opens {istString(open)} IST</Text>
+    <Screen>
+      <View style={{ flex: 1, justifyContent: 'center' }}>
+        {tripCard}
 
-      <View style={styles.clockWrap}>
         {missed ? (
-          <Text style={styles.missed}>Window likely closed — set up the next trip.</Text>
-        ) : isOpen ? (
-          <Text style={styles.openText}>TATKAL WINDOW OPEN</Text>
+          <ErrorState
+            title="Tatkal window likely closed"
+            message="Window likely closed — set up the next trip."
+            onRetry={nav.back}
+            retryLabel="Back"
+            retryIcon="arrowLeft"
+          />
         ) : (
-          <>
-            <Text style={styles.clock}>{fmt(msLeft)}</Text>
-            <Text style={styles.muted}>until the window opens</Text>
-          </>
+          <Card variant="elevated" style={{ alignItems: 'center', marginBottom: theme.spacing.md }}>
+            <Countdown
+              seconds={Math.max(0, msLeft / 1000)}
+              size="lg"
+              caption={isOpen ? 'Tatkal window is OPEN' : 'Tatkal window opens in'}
+              stateText={stateCopy.text}
+              stateVariant={stateCopy.variant}
+            />
+            <Text
+              style={{
+                marginTop: theme.spacing.md,
+                color: theme.colors.muted,
+                fontSize: ty.bodySm.size,
+              }}
+            >
+              Window opens {istString(open)} IST
+            </Text>
+          </Card>
         )}
-      </View>
 
-      {showWarmup && !missed && (
-        <TouchableOpacity
-          style={styles.warmup}
+        {!isOpen && !missed && (
+          <View style={{ marginBottom: theme.spacing.md }}>
+            <ReadinessCard
+              title="Get ready for the window"
+              items={[
+                { label: `Trip ${trip.trainNo} · ${trip.from} → ${trip.to} prepared`, done: true },
+                { label: 'IRCTC login saved on this device', done: hasLogin },
+                { label: 'Warm up your IRCTC session in time', done: false },
+              ]}
+            />
+          </View>
+        )}
+
+        {showWarmup && !missed && (
+          <SecondaryButton
+            title="Warm up IRCTC session — log in now, be ready at :00"
+            fullWidth
+            accessibilityLabel="Warm up IRCTC session — log in now, be ready at window open"
+            onPress={() => nav.go({ name: 'booking', tripId })}
+            style={{ marginBottom: theme.spacing.sm }}
+          />
+        )}
+
+        <PrimaryButton
+          title={isOpen ? 'FIRE — open IRCTC booking' : 'FIRE (enables at window open)'}
+          icon="ticket"
+          size="lg"
+          fullWidth
+          disabled={!isOpen}
+          accessibilityLabel={
+            isOpen
+              ? 'Fire — open IRCTC booking'
+              : 'Fire — disabled until the Tatkal window opens'
+          }
           onPress={() => nav.go({ name: 'booking', tripId })}
-        >
-          <Text style={styles.warmupText}>
-            Warm up IRCTC session — log in now, be ready at :00
+          style={{ marginTop: showWarmup && !missed ? 0 : theme.spacing.sm }}
+        />
+        {!isOpen && !missed && (
+          <Text
+            style={{
+              color: theme.colors.muted,
+              fontSize: ty.caption.size,
+              textAlign: 'center',
+              marginTop: theme.spacing.sm,
+            }}
+          >
+            FIRE enables exactly at {istString(open)} IST — no early fire; the
+            Tatkal form only goes live at :00.
           </Text>
-        </TouchableOpacity>
-      )}
+        )}
 
-      <TouchableOpacity
-        style={[styles.fire, !isOpen && styles.fireDisabled]}
-        disabled={!isOpen}
-        onPress={() => nav.go({ name: 'booking', tripId })}
-      >
-        <Text style={[styles.fireText, !isOpen && styles.fireTextDisabled]}>
-          {isOpen ? '🔥 FIRE — open IRCTC booking' : 'FIRE (enables at window open)'}
-        </Text>
-      </TouchableOpacity>
-      {!isOpen && !missed && (
-        <Text style={styles.note}>
-          FIRE enables exactly at {istString(open)} IST — no early fire; the
-          Tatkal form only goes live at :00.
-        </Text>
-      )}
-
-      <TouchableOpacity style={styles.back} onPress={nav.back}>
-        <Text style={styles.backText}>← Back</Text>
-      </TouchableOpacity>
-    </View>
+        <GhostButton
+          icon="arrowLeft"
+          title="Back"
+          accessibilityLabel="Go back"
+          onPress={nav.back}
+          fullWidth
+          style={{ marginTop: theme.spacing.sm }}
+        />
+      </View>
+    </Screen>
   );
 }
-
-const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.bg, padding: 16, justifyContent: 'center' },
-  title: { color: C.ink, fontSize: 20, fontWeight: '800', textAlign: 'center' },
-  sub: { color: C.muted, fontSize: 13, textAlign: 'center', marginTop: 4 },
-  clockWrap: { alignItems: 'center', marginVertical: 36 },
-  clock: { color: C.lime, fontSize: 52, fontWeight: '800', fontVariant: ['tabular-nums'] },
-  muted: { color: C.muted, fontSize: 14, textAlign: 'center' },
-  openText: { color: C.lime, fontSize: 26, fontWeight: '800', textAlign: 'center' },
-  missed: { color: C.danger, fontSize: 16, textAlign: 'center' },
-  warmup: {
-    borderColor: C.lime, borderWidth: 1, borderRadius: 10,
-    padding: 14, alignItems: 'center', marginBottom: 10,
-  },
-  warmupText: { color: C.lime, fontSize: 14, fontWeight: '700', textAlign: 'center' },
-  fire: {
-    backgroundColor: C.lime, borderRadius: 12, padding: 18, alignItems: 'center',
-  },
-  fireDisabled: { backgroundColor: C.card, borderColor: C.line, borderWidth: 1 },
-  fireText: { color: C.bg, fontSize: 18, fontWeight: '800' },
-  fireTextDisabled: { color: C.muted },
-  note: { color: C.muted, fontSize: 12, textAlign: 'center', marginTop: 10 },
-  back: { alignItems: 'center', padding: 14, marginTop: 8 },
-  backText: { color: C.ink, fontSize: 14, fontWeight: '600' },
-});

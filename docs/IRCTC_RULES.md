@@ -145,8 +145,9 @@ no-auto-book invariant is the legal load-bearing wall — keep it.
   UA, so UA changes are not a fix and must not be used as evasion. Sanctioned
   response: detect the denial (HTTP 403 / "Access Denied" title) and offer a
   genuine Chrome tab (expo-web-browser Custom Tabs — real browser identity,
-  shared login) as the fallback. No automation may attempt to bypass the
-  block.
+  shared login) as the fallback, landing directly on IRCTC's train-search
+  page (/nget/train-search) so the user skips the homepage. No automation
+  may attempt to bypass the block.
 - **UNVERIFIED — exact OTP screen position in the booking flow:** sources
   confirm the per-booking Aadhaar OTP is mandatory, but the precise screen
   order inside IRCTC's current SPA (before vs after payment selection) was

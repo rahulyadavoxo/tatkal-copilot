@@ -25,7 +25,8 @@
  *   a form, never looks at the gateway page, never solves CAPTCHA/OTP
  *   (both halt it).
  * - scanPaymentForViolations asserts all of the above on the generated
- *   source, and the harness asserts the gateway page is never scripted.
+ *   source in CI (test-time check, not a runtime guard), and the harness
+ *   asserts the gateway page is never scripted.
  */
 import { findSubmitPatterns } from './fillEngine';
 
@@ -85,7 +86,9 @@ export function scanPaymentForViolations(source: string): string[] {
     if (re.test(code)) hits.push(name);
   }
   // Positive controls: exactly two Continue targets (Review Journey page +
-  // Payment Methods page) and exactly one Pay & Book target.
+  // Payment Methods page) and exactly one Pay & Book target. (A third
+  // Continue for re-tapping was removed: IRCTC kills the session on
+  // double-clicked buttons.)
   const contTargets = code.match(/exactButton\('Continue'\)/g) || [];
   if (contTargets.length !== 2) hits.push('continue-target count != 2');
   const payBookTargets = code.match(/exactButton\('Pay & Book'\)/g) || [];
@@ -111,7 +114,7 @@ var PLAN = ${planJson};
 var SEED = ${seed};
 var log = (window.__tatkalEventLog = window.__tatkalEventLog || []);
 function post(type, data){
-  var e = { type: type, t: Math.round(performance.now()), data: data || {} };
+  var e = { type: type, t: Math.round(performance.now()), seed: SEED, data: data || {} };
   log.push(e);
   try {
     if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
@@ -141,20 +144,28 @@ function stepOk(step, extra){
 }
 // Visible page text via a TreeWalker over text nodes. (document.body.innerText
 // is unreliable in some WebView/headless contexts — it can return "" even
-// when elements render — while nodeValue + computed-style checks always
-// work. Hidden subtrees are skipped so only the shown page counts.)
+// when elements render — while nodeValue checks always work. Hidden subtrees
+// are skipped so only the shown page counts.)
 function pageText(){
   try {
     var out = [];
     var walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
       acceptNode: function(node){
         var el = node.parentElement;
-        while (el && el !== document.body) {
-          var cs;
-          try { cs = window.getComputedStyle(el); } catch (e) { return NodeFilter.FILTER_REJECT; }
-          if (cs.display === 'none' || cs.visibility === 'hidden') return NodeFilter.FILTER_REJECT;
-          el = el.parentElement;
-        }
+        if (!el) return NodeFilter.FILTER_REJECT;
+        // Cheap visibility test: display:none anywhere up the chain makes
+        // offsetParent null for non-positioned elements; position:fixed
+        // elements also report null offsetParent, so fall back to the rect
+        // for those. This avoids the per-ancestor getComputedStyle walk that
+        // forced a full style recalc inside every poll iteration.
+        try {
+          if (el.offsetParent === null) {
+            var tag = (el.tagName || '').toLowerCase();
+            if (tag === 'body' || tag === 'html') return NodeFilter.FILTER_ACCEPT;
+            var r = el.getBoundingClientRect();
+            if (r.width === 0 && r.height === 0) return NodeFilter.FILTER_REJECT;
+          }
+        } catch (e) { return NodeFilter.FILTER_REJECT; }
         return NodeFilter.FILTER_ACCEPT;
       }
     });
@@ -247,28 +258,64 @@ function findProvider(name){
   }
   return best;
 }
-function clickOption(el){
-  var radio = null;
-  try { radio = el.querySelector('input[type="radio"]'); } catch (e) {}
-  if (el.tagName === 'INPUT' && /^radio$/i.test(el.type || '')) radio = el;
-  if (radio) {
-    if (radio.checked) return 'already';
-    clickEl(radio);
-    return 'radio';
+// True when the page shows any known aggregator provider option (the
+// Multiple Payment Service list). Used to tell "provider list exists but
+// lacks the wanted provider" (halt) from "no provider list on this flow"
+// (skip) when the payment method was left to IRCTC's default.
+function anyProviderListed(){
+  var names = ['payu', 'paytm', 'phonepe', 'razorpay'];
+  for (var i = 0; i < names.length; i++) {
+    try { if (findProvider(names[i])) return true; } catch (e) {}
   }
+  return false;
+}
+// True when an option row is actually in the selected state (native radio,
+// ARIA, or a selected/active class). A synthetic click doesn't always flip
+// the control — never assume it did.
+function isSelected(el){
+  try {
+    var radio = null;
+    try { radio = el.querySelector('input[type="radio"]'); } catch (e) {}
+    if (!radio && el.tagName === 'INPUT' && /^radio$/i.test(el.type || '')) radio = el;
+    if (radio) return !!radio.checked;
+    var a = el.getAttribute ? (el.getAttribute('aria-checked') || el.getAttribute('aria-selected')) : null;
+    if (a != null) return /^(true|1)$/i.test(a);
+    var cls = '';
+    try { cls = el.className || ''; } catch (e2) {}
+    if (typeof cls !== 'string') { try { cls = cls.baseVal || ''; } catch (e3) {} }
+    if (/(^|\s)(selected|active|checked)($|\s)/i.test(cls)) return true;
+  } catch (e4) {}
+  return false;
+}
+// Click an option until it is verifiably selected. Never clicks an
+// already-selected option and never clicks the same target twice — IRCTC
+// kills the session on double-clicked options/buttons ("Sorry!!! Please Try
+// again!!"). At most two clicks: the row, then (if different) its inner
+// radio control.
+async function selectOption(el){
+  if (isSelected(el)) return true;
   clickEl(el);
-  return 'clicked';
+  await sleep(700);
+  if (isSelected(el)) return true;
+  var inner = null;
+  try { inner = el.querySelector('input[type="radio"], [role="radio"]'); } catch (e) {}
+  if (inner && inner !== el && !isSelected(el)) {
+    clickEl(inner);
+    await sleep(700);
+  }
+  return isSelected(el);
 }
 // ---------- step 1+2: Review Journey page -> Continue ----------
 async function stepReviewJourney(){
-  for (var i = 0; i < 40; i++) {
+  // No time limit: wait as long as it takes for the Review Journey page to
+  // open (slow connections). guard() still cancels the wait.
+  for (;;) {
     if (!guard()) return false;
     if (providerPageVisible()) return stepOk('reviewJourney', { skipped: true, reason: 'already-at-providers' });
     if (payMethodsVisible()) return stepOk('reviewJourney', { skipped: true, reason: 'already-at-paymethods' });
     if (reviewJourneyVisible()) break;
     await sleep(750);
   }
-  if (!reviewJourneyVisible()) return stepMissing('reviewJourney', 'Review Journey page did not open');
   var btn = exactButton('Continue');
   if (!btn) return stepMissing('reviewContinue', 'Continue not on Review Journey page');
   clickEl(btn);
@@ -284,23 +331,24 @@ function methodRegex(){
   return null;
 }
 async function stepPayMethods(){
-  for (var i = 0; i < 40; i++) {
+  // No time limit: wait as long as it takes for the Payment Methods page.
+  for (;;) {
     if (!guard()) return false;
     if (providerPageVisible()) return stepOk('payMethods', { skipped: true, reason: 'already-at-providers' });
     if (payMethodsVisible()) break;
     await sleep(750);
   }
-  if (!payMethodsVisible()) {
-    if (providerPageVisible()) return stepOk('payMethods', { skipped: true, reason: 'already-at-providers' });
-    return stepMissing('payMethods', 'Payment Methods page did not open');
-  }
   var rx = methodRegex();
   if (rx) {
     var opt = findOption(rx);
     if (!opt) return stepMissing('payMethod', 'payment method ' + PLAN.paymentMethod + ' not found');
-    var how = clickOption(opt);
-    if (how !== 'already') await sleep(600);
-    stepOk('payMethod', { method: PLAN.paymentMethod, how: how });
+    // Verify the tap actually selected the method — a synthetic click doesn't
+    // always flip the control's state (on-device: Multiple Payment Service
+    // never got selected). Halt rather than continue on the wrong method;
+    // the user taps it by hand once and resumes.
+    var methodSelected = await selectOption(opt);
+    if (!methodSelected) return stepMissing('payMethod', 'tap did not select ' + PLAN.paymentMethod);
+    stepOk('payMethod', { method: PLAN.paymentMethod });
   } else {
     stepOk('payMethod', { skipped: true, reason: 'irctc-default-kept' });
   }
@@ -312,33 +360,69 @@ async function stepPayMethods(){
 }
 // ---------- step 6+7+8: provider list -> Pay & Book -> STOP ----------
 async function stepProviders(){
-  for (var i = 0; i < 27; i++) {
+  // No time limit: wait as long as it takes for the provider page. Never
+  // re-tap Continue here — IRCTC kills the session on double-clicked buttons
+  // ("Sorry!!! Please Try again!!"). A tap that didn't register leaves the
+  // flow visibly parked at the Payment step for the user to resume.
+  for (;;) {
     if (!guard()) return false;
     if (providerPageVisible()) break;
-    if (payMethodsVisible()) return stepMissing('providers', 'still on Payment Methods page');
     await sleep(750);
   }
-  if (!providerPageVisible()) {
-    // We left the in-scope pages without reaching the provider list (e.g. a
-    // direct BHIM/UPI handoff). Whatever shows now is beyond this engine's
-    // scope — stop and hand control to the user.
-    if (!payMethodsVisible() && !reviewJourneyVisible()) { post('GATEWAY_REACHED', { direct: true }); return true; }
-    return stepMissing('providers', 'provider list did not open');
-  }
   var want = PLAN.paymentProvider || 'default';
-  if (want !== 'default') {
+  // The PayU/Paytm/PhonePe/Razorpay provider list only exists on the
+  // "Multiple Payment Service" flow. Under IRCTC iPay or BHIM/UPI there is no
+  // such provider list, so the provider step is skipped there. A provider
+  // that isn't offered is likewise skipped (never a halt) — the user takes
+  // over at the gateway and picks it by hand; the app says so in its notice.
+  var providersApply = PLAN.paymentMethod !== 'ipay' && PLAN.paymentMethod !== 'bhimUssd';
+  if (want !== 'default' && providersApply) {
     var opt = findProvider(want);
-    if (!opt) return stepMissing('payProvider', 'provider ' + want + ' not found');
-    var how = clickOption(opt);
-    if (how !== 'already') await sleep(600);
-    stepOk('payProvider', { provider: want, how: how });
+    if (!opt) {
+      // Never halt here: the user takes over at the gateway by design and can
+      // pick the provider by hand there. A halt would re-trigger on every
+      // resume, trapping the flow whenever IRCTC doesn't offer the saved
+      // provider (on-device 2026-10-08: "provider phonepe not found" on the
+      // iPay page — which has no provider list — across three OTAs).
+      stepOk('payProvider', {
+        skipped: true,
+        reason: anyProviderListed() ? 'provider-not-offered' : 'no-provider-list-for-method',
+        wanted: want,
+      });
+    } else {
+      // Verify the selection took; a missed tap here never halts — the user
+      // picks the provider by hand at the gateway, and the app says so.
+      var providerSelected = await selectOption(opt);
+      if (providerSelected) {
+        stepOk('payProvider', { provider: want });
+      } else {
+        stepOk('payProvider', { skipped: true, reason: 'provider-not-selected', wanted: want });
+      }
+    }
   } else {
-    stepOk('payProvider', { skipped: true, reason: 'irctc-default-kept' });
+    stepOk('payProvider', { skipped: true, reason: want === 'default' ? 'irctc-default-kept' : 'no-provider-list-for-method' });
   }
   var btn = exactButton('Pay & Book');
   if (!btn) return stepMissing('payBook', 'Pay & Book not found');
+  var beforeUrl = '';
+  try { beforeUrl = location.href; } catch (e) {}
+  var beforeText = pageText();
   clickEl(btn);
-  await sleep(1200);
+  // Verify the gateway actually opened: a fixed sleep declared success even
+  // when the tap never registered — a false success on the money step.
+  // No time limit (slow connections), but never auto-re-tap the money
+  // button: a tap that didn't register leaves the flow visibly parked at the
+  // Payment step for the user to handle.
+  for (;;) {
+    await sleep(700);
+    if (!guard()) return false;
+    var nowUrl = '';
+    try { nowUrl = location.href; } catch (e) {}
+    if (nowUrl !== beforeUrl) break;                           // navigated away
+    if (!providerPageVisible()) break;                         // left the provider page
+    var nowText = pageText();
+    if (nowText !== beforeText && /pay|gateway|upi|bank/i.test(nowText)) break; // gateway content appeared
+  }
   // STOP. The gateway page is never inspected or touched — the user pays by hand.
   post('GATEWAY_REACHED', {});
   return true;
@@ -347,10 +431,7 @@ async function stepProviders(){
 async function run(){
   post('PAYMENT_STARTED', {});
   if (!guard()) return;
-  // Resume: if a later page is already showing, jump straight to it.
-  if (providerPageVisible() || payMethodsVisible() || reviewJourneyVisible()) {
-    // fall through to the step chain — each step skips when already past it
-  }
+  // Resume-safe: each step below skips when its page is already past it.
   var steps = [stepReviewJourney, stepPayMethods, stepProviders];
   for (var s = 0; s < steps.length; s++) {
     if (!guard()) return;

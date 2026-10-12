@@ -1,481 +1,671 @@
 /**
- * Home — "Speed Protocol" dashboard (user-supplied mockup, 2026-10-02).
+ * Home — Tatkal Command Center (Wave 2b redesign).
  *
- * Saved trips as live-monitoring cards, real stat counts, and quick
- * controls into the app's real screens. The stats are REAL vault counts —
- * never fabricated marketing numbers.
+ * - Greeting header + local privacy indicator (device-only storage).
+ * - "Your trips" hero: the focused upcoming trip (nearest by default) with a
+ *   switcher when several upcoming trips exist — countdown, readiness and
+ *   the CTA all follow the focused trip.
+ * - LIVE countdown computed from the REAL window math (src/core/timing.ts +
+ *   TATKAL_TIMING) — never faked, never a marketing number.
+ * - Readiness checklist derived from real vault state (trips, passengers,
+ *   IRCTC username), each missing item deep-linking to its setup screen.
+ * - Contextual primary CTA: Prepare booking / Get ready / Start booking /
+ *   Continue booking — never a generic always-on "Book Now".
+ * - Quick-action grid (proper icons, 44dp+ targets), compact
+ *   Passengers/PNR summary rows.
+ *
+ * All styling comes from the design system (useTheme + ../components/ui);
+ * no hard-coded colors, no emojis.
  */
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Dimensions,
+  AccessibilityInfo,
   ScrollView,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { C } from '../theme';
-import { loadPassengers, loadTrips, saveTrips, type Trip } from '../vaultStore';
+import { useTheme } from '../theme';
+import { Icon, ICON_SIZE } from '../components/icons';
+import {
+  AppHeader,
+  Card,
+  Chip,
+  Countdown,
+  EmptyState,
+  ErrorState,
+  ListRow,
+  ProgressBar,
+  Screen,
+  Skeleton,
+  StoryAction,
+} from '../components/ui';
+import {
+  loadIrctcCredentials,
+  loadPassengers,
+  loadPnrs,
+  loadTrips,
+  resolveTripPassengers,
+  type Passenger,
+  type Trip,
+} from '../vaultStore';
 import { isTatkalQuota } from '../core/tatkalConfig';
+import { msUntilTatkalOpen, tatkalBookingOpen } from '../core/timing';
+import { TATKAL_TIMING } from '../timingConfig';
 import { TRAINS } from '../data/trains';
-import { STATIONS } from '../data/stations';
-import type { Nav } from '../App';
+import type { Route } from '../App';
 import { useFocusLoad } from './hooks';
 
-const CARD_W = Math.round(Dimensions.get('window').width * 0.86);
+/**
+ * Shell routes are owned by the Wave 2a shell worker; they are declared in
+ * App.tsx by that wave. Until then we cast so Home can already link to them
+ * verbatim without breaking tsc. The cast is a no-op once the routes exist.
+ */
+type ShellRouteName = 'security' | 'help' | 'notifications';
+function shellRoute(name: ShellRouteName): Route {
+  return { name } as unknown as Route;
+}
 
-const MONTHS = [
-  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
-];
+const MISSED_AFTER_MS = 3 * 60 * 60 * 1000; // window realistically dead after ~3h
+const NEAR_OPEN_MS = 30 * 60 * 1000;
+const GET_READY_MS = 10 * 60 * 1000;
+const ALMOST_MS = 60 * 1000;
 
-const CLASS_LABELS: Record<string, string> = {
-  'All Classes': 'All Classes',
-  EA: 'Anubhuti',
-  '1A': 'AC First Class',
-  EV: 'Vistadome AC',
-  EC: 'Executive Chair Car',
-  '2A': 'AC 2-Tier',
-  FC: 'First Class',
-  '3A': 'AC 3-Tier',
-  '3E': 'AC 3-Tier Economy',
-  VC: 'Vistadome',
-  CC: 'AC Chair Car',
-  SL: 'Sleeper',
-  VS: 'Vistadome',
-  '2S': 'Second Sitting',
+type WindowState =
+  | 'far'
+  | 'approaching'
+  | 'getReady'
+  | 'almost'
+  | 'open'
+  | 'missed'
+  | 'noWindow' // non-Tatkal quota: book anytime, no timed countdown
+  | 'badDate';
+
+const WINDOW_COPY: Record<WindowState, { stateText: string; variant: 'info' | 'success' | 'warn' }> = {
+  far: { stateText: 'Your trip is ready', variant: 'info' },
+  approaching: { stateText: 'Tatkal opens soon', variant: 'warn' },
+  getReady: { stateText: 'Get everything ready', variant: 'warn' },
+  almost: { stateText: 'Almost time', variant: 'warn' },
+  open: { stateText: 'Tatkal is open — your final action', variant: 'success' },
+  missed: { stateText: 'Window closed — plan your next trip', variant: 'info' },
+  noWindow: { stateText: 'No timed window for this quota', variant: 'info' },
+  badDate: { stateText: 'Trip date needs a fix', variant: 'warn' },
 };
 
-function fmtDate(iso: string): string {
-  const parts = iso.split('-').map(Number);
-  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return iso;
-  const [y, m, d] = parts;
-  if (m < 1 || m > 12) return iso;
-  return `${MONTHS[m - 1]} ${String(d).padStart(2, '0')}, ${String(y).slice(2)}`;
+function greetingFor(hour: number): { text: string; icon: 'sun' | 'moon' } {
+  if (hour >= 5 && hour < 12) return { text: 'Good morning', icon: 'sun' };
+  if (hour >= 12 && hour < 17) return { text: 'Good afternoon', icon: 'sun' };
+  return { text: 'Good evening', icon: 'moon' };
+}
+
+/** Hero card tag follows the trip's actual quota — a General-quota trip is
+ *  not a Tatkal trip, so it must not say "YOUR NEXT TATKAL". */
+function heroTagFor(quota: string | undefined, multi: boolean): string {
+  if (multi) return 'SELECTED TRIP';
+  const q = (quota ?? '').trim().toUpperCase();
+  if (q === 'PREMIUM TATKAL') return 'YOUR NEXT PREMIUM TATKAL';
+  if (q === 'TATKAL') return 'YOUR NEXT TATKAL';
+  return 'YOUR NEXT TRIP';
 }
 
 function trainName(no: string): string | null {
   const norm = (s: string) => s.replace(/^0+/, '');
   const t =
-    TRAINS.find((x) => x.no === no) ??
-    TRAINS.find((x) => norm(x.no) === norm(no));
+    TRAINS.find((x) => x.no === no) ?? TRAINS.find((x) => norm(x.no) === norm(no));
   return t ? t.name : null;
 }
 
-function stationName(code: string): string {
-  return STATIONS.find((s) => s.code === code)?.name ?? '';
+function fmtDate(iso: string): string {
+  const parts = iso.split('-').map(Number);
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return iso;
+  const [y, m, d] = parts;
+  const months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+  ];
+  if (m < 1 || m > 12) return iso;
+  return `${months[m - 1]} ${d}, ${y}`;
 }
 
-function opensAt(trip: Trip): string {
-  const q = trip.quota ?? 'TATKAL';
-  if (!isTatkalQuota(q)) return 'book anytime';
-  return trip.isAC ? 'opens 10:00' : 'opens 11:00';
+/** True for journeyDate on/after today (local calendar day). */
+function isUpcoming(iso: string): boolean {
+  const parts = iso.split('-').map(Number);
+  if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return false;
+  const [y, m, d] = parts;
+  const today = new Date();
+  const todayKey = today.getFullYear() * 10000 + (today.getMonth() + 1) * 100 + today.getDate();
+  return y * 10000 + m * 100 + d >= todayKey;
 }
 
-function classLabel(code: string): string {
-  return `${CLASS_LABELS[code] ?? code} (${code})`;
+function windowStateFor(msLeft: number): WindowState {
+  if (msLeft < -MISSED_AFTER_MS) return 'missed';
+  if (msLeft <= 0) return 'open';
+  if (msLeft <= ALMOST_MS) return 'almost';
+  if (msLeft <= GET_READY_MS) return 'getReady';
+  if (msLeft <= NEAR_OPEN_MS) return 'approaching';
+  return 'far';
 }
 
-export default function HomeScreen({ nav }: { nav: Nav }) {
+interface ReadinessEntry {
+  label: string;
+  done: boolean;
+  route: Route;
+}
+
+export default function HomeScreen({ nav }: { nav: { go: (r: Route) => void; back: () => void } }) {
+  const { theme } = useTheme();
+  const t = theme.typography;
+  const c = theme.colors;
+  const s = theme.spacing;
+
   const [trips, setTrips] = useState<Trip[]>([]);
-  const [travellerCount, setTravellerCount] = useState(0);
+  const [passengers, setPassengers] = useState<Passenger[]>([]);
+  const passengerCount = passengers.length;
+  const [pnrCount, setPnrCount] = useState(0);
+  const [hasIrctcUsername, setHasIrctcUsername] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+
+  const greeting = useMemo(() => greetingFor(new Date().getHours()), []);
 
   const reload = useCallback(async () => {
-    const [ts, pax] = await Promise.all([loadTrips(), loadPassengers()]);
-    setTrips(ts);
-    setTravellerCount(pax.length);
+    setLoadError(false);
+    try {
+      const [ts, pax, pnrs, creds] = await Promise.all([
+        loadTrips(),
+        loadPassengers(),
+        loadPnrs(),
+        loadIrctcCredentials(),
+      ]);
+      setTrips(ts);
+      setPassengers(pax);
+      setPnrCount(pnrs.length);
+      setHasIrctcUsername(Boolean(creds?.username?.trim()));
+    } catch {
+      setLoadError(true);
+    } finally {
+      setLoaded(true);
+    }
   }, []);
   useFocusLoad(reload);
 
-  const removeTrip = async (id: string) => {
-    const next = trips.filter((t) => t.id !== id);
-    setTrips(next);
-    await saveTrips(next);
-  };
+  // All upcoming trips, nearest first.
+  const upcomingTrips = useMemo<Trip[]>(() => {
+    const upcoming = trips.filter((x) => isUpcoming(x.journeyDate));
+    return [...upcoming].sort((a, b) => a.journeyDate.localeCompare(b.journeyDate));
+  }, [trips]);
 
-  const goTile = (name: 'irctcAccount' | 'passengers' | 'pnr' | 'trainLookup') =>
-    nav.go({ name });
+  // Nearest upcoming trip by journey date (the pre-switcher default).
+  const nearestTrip = useMemo<Trip | null>(() => upcomingTrips[0] ?? null, [upcomingTrips]);
+
+  // The trip the home screen is focused on: nearest by default, switchable
+  // via the trip chips when several upcoming trips exist. The countdown,
+  // readiness checklist and the CTA all follow the focused trip, so every
+  // trip can be booked from the home page.
+  const [selectedTripId, setSelectedTripId] = useState<string | null>(null);
+  const activeTrip = useMemo<Trip | null>(
+    () => upcomingTrips.find((x) => x.id === selectedTripId) ?? nearestTrip,
+    [upcomingTrips, selectedTripId, nearestTrip],
+  );
+
+  // Tick the countdown once a second while a trip is on screen.
+  useEffect(() => {
+    if (!activeTrip) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [activeTrip]);
+
+  // Real window math — never fake the countdown.
+  const windowInfo = useMemo(() => {
+    if (!activeTrip) return { state: 'far' as WindowState, msLeft: Infinity, open: null as Date | null };
+    if (!isTatkalQuota(activeTrip.quota)) {
+      return { state: 'noWindow' as WindowState, msLeft: Infinity, open: null as Date | null };
+    }
+    try {
+      const open = tatkalBookingOpen(activeTrip.journeyDate, activeTrip.isAC, TATKAL_TIMING);
+      const msLeft = msUntilTatkalOpen(activeTrip.journeyDate, activeTrip.isAC, TATKAL_TIMING, new Date(now));
+      return { state: windowStateFor(msLeft), msLeft, open };
+    } catch {
+      return { state: 'badDate' as WindowState, msLeft: Infinity, open: null as Date | null };
+    }
+  }, [activeTrip, now]);
+
+  // Announce countdown STATE changes only (never the ticking digits).
+  const [announced, setAnnounced] = useState<string | null>(null);
+  useEffect(() => {
+    if (!loaded || !activeTrip) return;
+    const key = windowInfo.state;
+    if (key !== announced) {
+      setAnnounced(key);
+      AccessibilityInfo.announceForAccessibility(
+        `${activeTrip.trainNo}, ${activeTrip.from} to ${activeTrip.to}. ${WINDOW_COPY[key].stateText}.`,
+      );
+    }
+  }, [windowInfo.state, loaded, activeTrip, announced]);
+
+  const readiness = useMemo<ReadinessEntry[]>(() => {
+    if (!activeTrip) return [];
+    // Same rule as the booking flow: linked passengers if they resolve,
+    // otherwise every saved passenger — the checklist never disagrees with
+    // what booking will actually fill.
+    const n = resolveTripPassengers(activeTrip, passengers).length;
+    return [
+      { label: 'Trip configured', done: true, route: { name: 'tripSetup', tripId: activeTrip.id } },
+      { label: 'Train selected', done: activeTrip.trainNo.trim().length > 0, route: { name: 'tripSetup', tripId: activeTrip.id } },
+      { label: 'Class selected', done: activeTrip.classCode.trim().length > 0, route: { name: 'tripSetup', tripId: activeTrip.id } },
+      { label: `Passengers saved (${Math.min(n, 4)}/4)`, done: n >= 1, route: { name: 'passengers' } },
+      { label: 'Berth preferences set', done: passengerCount > 0, route: { name: 'passengers' } },
+      { label: 'IRCTC username saved', done: hasIrctcUsername, route: { name: 'irctcAccount' } },
+    ];
+  }, [activeTrip, passengers, hasIrctcUsername]);
+
+  const firstMissing = readiness.find((r) => !r.done);
+  const allReady = readiness.length > 0 && !firstMissing;
+
+  // Contextual primary CTA — never a generic always-on "Book Now".
+  const cta = useMemo(() => {
+    if (!activeTrip) return null;
+    if (windowInfo.state === 'badDate') {
+      return { title: 'Fix trip date', onPress: () => nav.go({ name: 'tripSetup', tripId: activeTrip.id }), icon: 'edit' as const };
+    }
+    if (windowInfo.state === 'noWindow') {
+      return { title: 'Book now', onPress: () => nav.go({ name: 'booking', tripId: activeTrip.id }), icon: 'ticket' as const };
+    }
+    if (!allReady) {
+      return { title: 'Continue booking', onPress: () => nav.go({ name: 'tripSetup', tripId: activeTrip.id }), icon: 'chevronRight' as const };
+    }
+    switch (windowInfo.state) {
+      case 'open':
+        return { title: 'Start booking', onPress: () => nav.go({ name: 'booking', tripId: activeTrip.id }), icon: 'ticket' as const };
+      case 'almost':
+      case 'getReady':
+      case 'approaching':
+        return { title: 'Get ready', onPress: () => nav.go({ name: 'countdown', tripId: activeTrip.id }), icon: 'clock' as const };
+      case 'missed':
+        return { title: 'Plan your next trip', onPress: () => nav.go({ name: 'tripSetup' }), icon: 'plus' as const };
+      case 'far':
+      default:
+        return { title: 'Prepare booking', onPress: () => nav.go({ name: 'tripSetup', tripId: activeTrip.id }), icon: 'chevronRight' as const };
+    }
+  }, [activeTrip, windowInfo.state, allReady, nav]);
+
+  const quickActions = useMemo(
+    () => [
+      { key: 'setup', label: 'New trip', icon: 'train' as const, onPress: () => nav.go({ name: 'tripSetup' }) },
+      { key: 'train', label: 'Find train', icon: 'search' as const, onPress: () => nav.go({ name: 'trainLookup' }) },
+      { key: 'pnr', label: 'PNRs', icon: 'ticket' as const, onPress: () => nav.go({ name: 'pnr' }) },
+      { key: 'pax', label: 'Passengers', icon: 'users' as const, onPress: () => nav.go({ name: 'passengers' }) },
+      { key: 'irctc', label: 'IRCTC', icon: 'shield' as const, onPress: () => nav.go({ name: 'irctcAccount' }) },
+      { key: 'guide', label: 'Guide', icon: 'helpCircle' as const, onPress: () => nav.go(shellRoute('help')) },
+    ],
+    [nav],
+  );
+
+  if (!loaded) {
+    return (
+      <Screen scroll={false}>
+        <View style={styles.loading}>
+          <Skeleton width="45%" height={24} accessibilityLabel="Loading greeting" />
+          <View style={{ height: s.lg }} />
+          <Skeleton width="100%" height={150} radius={theme.radius.lg} accessibilityLabel="Loading your next Tatkal" />
+          <View style={{ height: s.md }} />
+          <Skeleton width="100%" height={170} radius={theme.radius.lg} accessibilityLabel="Loading countdown" />
+          <View style={{ height: s.md }} />
+          <Skeleton width="100%" height={190} radius={theme.radius.lg} accessibilityLabel="Loading readiness checklist" />
+        </View>
+      </Screen>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <Screen scroll={false}>
+        <ErrorState
+          title="Couldn't load your data"
+          message="Your vault is still safe on this device — this was a loading hiccup. Try again."
+          onRetry={reload}
+        />
+      </Screen>
+    );
+  }
+
+  const copy = WINDOW_COPY[windowInfo.state];
+  const readyCount = readiness.filter((r) => r.done).length;
+  const showCountdown = !['noWindow', 'badDate', 'missed'].includes(windowInfo.state);
+  const tn = activeTrip ? trainName(activeTrip.trainNo) : null;
 
   return (
-    <ScrollView style={styles.root} contentContainerStyle={styles.inner}>
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.logo}>
-          <Text style={styles.logoBolt}>⚡</Text>
-        </View>
-        <View>
-          <Text style={styles.brand}>
-            Tatkal<Text style={styles.brandAccent}>Copilot</Text>
-          </Text>
-          <Text style={styles.tagline}>SPEED PROTOCOL V2.4</Text>
-        </View>
-      </View>
+    <Screen>
+      {/* App bar — user name + bell, like the big social apps */}
+      <AppHeader
+        title={passengers.length > 0 ? passengers[0].name.trim().split(/\s+/)[0] || 'Tatkal' : 'Tatkal'}
+        subtitle={`${greeting.text}`}
+        actions={[
+          { icon: 'bell', label: 'Notifications', onPress: () => nav.go(shellRoute('notifications')) },
+          { icon: 'settings', label: 'Settings', onPress: () => nav.go({ name: 'settings' } as Route) },
+        ]}
+      />
 
-      {/* Stats — real vault counts, never fabricated */}
-      <View style={styles.stats}>
-        <View style={styles.stat}>
-          <View style={[styles.statIcon, { backgroundColor: '#1E2B22' }]}>
-            <Text style={styles.statEmoji}>✓</Text>
-          </View>
-          <View>
-            <Text style={styles.statLabel}>SAVED TRIPS</Text>
-            <Text style={styles.statValue}>{trips.length}</Text>
-          </View>
-        </View>
-        <View style={styles.stat}>
-          <View style={[styles.statIcon, { backgroundColor: '#26233A' }]}>
-            <Text style={styles.statEmoji}>👥</Text>
-          </View>
-          <View>
-            <Text style={styles.statLabel}>TRAVELLERS</Text>
-            <Text style={styles.statValue}>{travellerCount}</Text>
-          </View>
-        </View>
-      </View>
+      {/* Story-style shortcuts */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={{ marginHorizontal: -s.lg, marginBottom: s.lg }}
+        contentContainerStyle={{ paddingHorizontal: s.md, gap: 2 }}
+      >
+        {quickActions.map((a, i) => (
+          <StoryAction key={a.key} icon={a.icon} label={a.label} onPress={a.onPress} highlight={i === 0} />
+        ))}
+      </ScrollView>
 
-      {/* Live monitoring */}
-      <Text style={styles.section}>Live Monitoring</Text>
-      {trips.length === 0 ? (
-        <View style={styles.emptyCard}>
-          <Text style={styles.emptyTitle}>No trips yet</Text>
-          <Text style={styles.emptySub}>
-            Set up a trip with your train, date and passengers — then launch
-            it at the Tatkal window.
-          </Text>
-          <TouchableOpacity
-            style={styles.launch}
-            onPress={() => nav.go({ name: 'tripSetup' })}
+      {activeTrip ? (
+        <>
+          {upcomingTrips.length > 1 && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={{ marginBottom: s.md }}
+              contentContainerStyle={{ gap: s.sm }}
+              accessibilityRole="radiogroup"
+              accessibilityLabel="Choose which trip the home page shows"
+            >
+              {upcomingTrips.map((trip) => (
+                <Chip
+                  key={trip.id}
+                  label={`${trip.from} → ${trip.to} · ${fmtDate(trip.journeyDate)}`}
+                  selected={trip.id === activeTrip.id}
+                  onPress={() => setSelectedTripId(trip.id)}
+                />
+              ))}
+            </ScrollView>
+          )}
+
+          {/* Hero ticket — boarding-pass layout: route, facts, status, one action */}
+          <View
+            style={[
+              styles.hero,
+              { backgroundColor: c.primary, borderRadius: theme.radius.xl },
+            ]}
           >
-            <Text style={styles.launchText}>+ Set up a trip</Text>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <ScrollView
-          horizontal
-          pagingEnabled={false}
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.cards}
-          snapToInterval={CARD_W + 12}
-          decelerationRate="fast"
-        >
-          {trips.map((item) => {
-            const name = trainName(item.trainNo);
-            return (
-              <View key={item.id} style={styles.tripCard}>
-                <View style={styles.tripTop}>
-                  <Text style={styles.liveDot}>
-                    <Text style={styles.dot}>●</Text> SAVED TRIP
+            {/* soft decorative glow, purely visual */}
+            <View pointerEvents="none" style={[styles.glow, { backgroundColor: c.onPrimary }]} />
+
+            <View style={styles.heroPad}>
+              <View style={styles.heroTop}>
+                <View style={[styles.heroTag, { backgroundColor: 'rgba(255,255,255,0.16)' }]}>
+                  <Icon name="train" size={ICON_SIZE.xs} color={c.onPrimary} />
+                  <Text style={[styles.heroTagText, { color: c.onPrimary }]}>
+                    {heroTagFor(activeTrip.quota, upcomingTrips.length > 1)}
                   </Text>
-                  <Text style={styles.trainLine} numberOfLines={1}>
-                    {item.trainNo}
-                    {name ? ` • ${name}` : ''}
-                  </Text>
-                  <View style={styles.cardTools}>
-                    <TouchableOpacity
-                      onPress={() =>
-                        nav.go({ name: 'tripSetup', tripId: item.id })
-                      }
-                    >
-                      <Text style={styles.tool}>✎ Edit</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={() => removeTrip(item.id)}>
-                      <Text style={[styles.tool, styles.toolDanger]}>✕</Text>
-                    </TouchableOpacity>
-                  </View>
                 </View>
-                <View style={styles.tripBody}>
-                  <View style={styles.route}>
-                    <View style={styles.station}>
-                      <Text style={styles.code}>{item.from}</Text>
-                      <Text style={styles.stationName} numberOfLines={1}>
-                        {stationName(item.from) || '—'}
-                      </Text>
-                    </View>
-                    <Text style={styles.trainIcon}>🚂</Text>
-                    <View style={[styles.station, styles.toStation]}>
-                      <Text style={[styles.code, styles.toCode]}>
-                        {item.to}
-                      </Text>
-                      <Text style={styles.stationName} numberOfLines={1}>
-                        {stationName(item.to) || '—'}
-                      </Text>
-                    </View>
-                  </View>
-                  <View style={styles.meta}>
-                    <View style={styles.metaCell}>
-                      <Text style={styles.metaLabel}>DATE</Text>
-                      <Text style={styles.metaValue}>
-                        {fmtDate(item.journeyDate)}
-                      </Text>
-                    </View>
-                    <View style={styles.metaCell}>
-                      <Text style={styles.metaLabel}>CLASS</Text>
-                      <Text style={styles.metaValue} numberOfLines={1}>
-                        {classLabel(item.classCode)}
-                      </Text>
-                    </View>
-                    <View style={styles.metaCell}>
-                      <Text style={styles.metaLabel}>QUOTA</Text>
-                      <Text style={[styles.metaValue, styles.quota]}>
-                        {item.quota ?? 'TATKAL'}
-                      </Text>
-                    </View>
-                  </View>
-                  <Text style={styles.opens}>
-                    {opensAt(item)} · {item.passengerIds.length} traveller
-                    {item.passengerIds.length === 1 ? '' : 's'}
-                  </Text>
-                  <TouchableOpacity
-                    style={styles.launch}
-                    onPress={() =>
-                      nav.go({ name: 'countdown', tripId: item.id })
-                    }
+                <TouchableOpacity
+                  onPress={() => nav.go({ name: 'tripSetup', tripId: activeTrip.id })}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Edit trip ${activeTrip.trainNo} from ${activeTrip.from} to ${activeTrip.to}`}
+                  hitSlop={12}
+                  style={[styles.heroEdit, { borderColor: 'rgba(255,255,255,0.45)' }]}
+                >
+                  <Icon name="edit" size={ICON_SIZE.xs} color={c.onPrimary} />
+                  <Text style={{ fontSize: t.caption.size, fontWeight: '800', color: c.onPrimary, marginLeft: 6 }}>Edit</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* From ——train—— To */}
+              <View
+                style={styles.heroRoute}
+                accessible
+                accessibilityLabel={`From ${activeTrip.from} to ${activeTrip.to}`}
+              >
+                <View style={styles.stationCol}>
+                  <Text style={[styles.stationLabel, { color: c.onPrimary }]}>FROM</Text>
+                  <Text
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    style={[styles.stationCode, { color: c.onPrimary }]}
                   >
-                    <Text style={styles.launchText}>Launch Attempt</Text>
-                  </TouchableOpacity>
+                    {activeTrip.from}
+                  </Text>
+                </View>
+                <View style={styles.track}>
+                  <View style={[styles.trackDot, { borderColor: c.onPrimary }]} />
+                  <View style={[styles.trackLine, { borderColor: c.onPrimary }]} />
+                  <View style={[styles.trackBadge, { backgroundColor: c.onPrimary }]}>
+                    <Icon name="train" size={ICON_SIZE.sm} color={c.primary} />
+                  </View>
+                  <View style={[styles.trackLine, { borderColor: c.onPrimary }]} />
+                  <View style={[styles.trackDot, { borderColor: c.onPrimary, backgroundColor: c.onPrimary }]} />
+                </View>
+                <View style={[styles.stationCol, { alignItems: 'flex-end' }]}>
+                  <Text style={[styles.stationLabel, { color: c.onPrimary }]}>TO</Text>
+                  <Text
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    style={[styles.stationCode, { color: c.onPrimary }]}
+                  >
+                    {activeTrip.to}
+                  </Text>
                 </View>
               </View>
-            );
-          })}
-        </ScrollView>
+
+              <Text numberOfLines={1} style={[styles.trainLine, { color: c.onPrimary }]}>
+                {activeTrip.trainNo}
+                {tn ? ` · ${tn}` : ''}
+              </Text>
+            </View>
+
+            {/* Ticket perforation with side notches */}
+            <View style={styles.perfRow}>
+              <View style={[styles.notch, styles.notchL, { backgroundColor: c.bg }]} />
+              <View style={[styles.perf, { borderColor: c.onPrimary }]} />
+              <View style={[styles.notch, styles.notchR, { backgroundColor: c.bg }]} />
+            </View>
+
+            <View style={styles.heroPad2}>
+              {/* Journey facts as pills, same style as the top tag */}
+              <View style={styles.factsRow}>
+                {[
+                  { k: 'date', v: fmtDate(activeTrip.journeyDate), icon: 'calendar' as const },
+                  { k: 'class', v: activeTrip.classCode, icon: null },
+                  { k: 'quota', v: activeTrip.quota ?? 'TATKAL', icon: null },
+                ].map((f) => (
+                  <View
+                    key={f.k}
+                    style={[styles.heroTag, { backgroundColor: 'rgba(255,255,255,0.16)' }]}
+                    accessible
+                    accessibilityLabel={`${f.k} ${f.v}`}
+                  >
+                    {f.icon ? <Icon name={f.icon} size={ICON_SIZE.xs} color={c.onPrimary} /> : null}
+                    <Text style={[styles.heroTagText, { color: c.onPrimary }]}>{String(f.v).toUpperCase()}</Text>
+                  </View>
+                ))}
+              </View>
+
+              {showCountdown ? (
+                <View accessibilityLiveRegion="none" style={[styles.countWrap, { backgroundColor: c.bg, borderRadius: theme.radius.lg }]}>
+                  <Countdown
+                    seconds={Math.max(0, Math.floor(windowInfo.msLeft / 1000))}
+                    size="md"
+                    caption="Tatkal window opens in"
+                    stateText={copy.stateText}
+                    stateVariant={copy.variant}
+                  />
+                </View>
+              ) : (
+                <View style={[styles.statusPill, { backgroundColor: 'rgba(255,255,255,0.14)' }]}>
+                  <View style={[styles.statusIcon, { backgroundColor: c.onPrimary }]}>
+                    <Icon
+                      name={windowInfo.state === 'noWindow' ? 'check' : windowInfo.state === 'badDate' ? 'alertTriangle' : 'clock'}
+                      size={ICON_SIZE.xs}
+                      color={c.primary}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.statusTitle, { color: c.onPrimary }]}>
+                      {windowInfo.state === 'noWindow'
+                        ? 'Book anytime'
+                        : windowInfo.state === 'badDate'
+                          ? 'Check the journey date'
+                          : 'Window has closed'}
+                    </Text>
+                    <Text style={[styles.statusSub, { color: c.onPrimary }]}>
+                      {windowInfo.state === 'noWindow'
+                        ? `No timed Tatkal window for the ${activeTrip.quota} quota — you can book anytime.`
+                        : windowInfo.state === 'badDate'
+                          ? "This trip's journey date couldn't be read — edit the trip and pick the date again."
+                          : 'The Tatkal window for this trip has likely closed. Set up your next trip.'}
+                    </Text>
+                  </View>
+                </View>
+              )}
+
+              {cta && (
+                <TouchableOpacity
+                  onPress={cta.onPress}
+                  accessibilityRole="button"
+                  accessibilityLabel={cta.title}
+                  activeOpacity={0.85}
+                  style={[styles.heroCta, { backgroundColor: c.onPrimary, borderRadius: theme.radius.full }]}
+                >
+                  <Text style={{ fontSize: t.body.size + 1, fontWeight: '800', color: c.primary }}>{cta.title}</Text>
+                  <View style={[styles.ctaArrow, { backgroundColor: c.primary }]}>
+                    <Icon name="arrowRight" size={ICON_SIZE.sm} color={c.onPrimary} />
+                  </View>
+                </TouchableOpacity>
+              )}
+            </View>
+          </View>
+
+          {/* Readiness — one bar + the single next step, details on demand */}
+          <Card style={{ marginTop: s.lg }}>
+            <View style={styles.rowBetween}>
+              <Text style={{ fontSize: t.h3.size, fontWeight: '800', color: c.ink }}>
+                {allReady ? "You're all set" : 'Finish setting up'}
+              </Text>
+              <Text style={{ fontSize: t.bodySm.size, fontWeight: '800', color: allReady ? c.success : c.muted }}>
+                {readyCount}/{readiness.length}
+              </Text>
+            </View>
+            <ProgressBar
+              value={readiness.length ? readyCount / readiness.length : 0}
+              color={allReady ? c.success : c.primary}
+              style={{ marginTop: s.sm, marginBottom: s.md }}
+            />
+            {readiness.map((r) => (
+              <TouchableOpacity
+                key={r.label}
+                onPress={() => nav.go(r.route)}
+                disabled={r.done}
+                accessibilityRole="button"
+                accessibilityLabel={`${r.label}: ${r.done ? 'done' : 'not done, tap to fix'}`}
+                style={styles.checkRow}
+              >
+                <View
+                  style={[
+                    styles.checkDot,
+                    r.done
+                      ? { backgroundColor: c.success }
+                      : { borderWidth: 1.5, borderColor: c.line },
+                  ]}
+                >
+                  {r.done ? <Icon name="check" size={ICON_SIZE.xs} color={c.bg} /> : null}
+                </View>
+                <Text
+                  style={{
+                    flex: 1,
+                    fontSize: t.bodySm.size,
+                    fontWeight: r.done ? '500' : '700',
+                    color: r.done ? c.muted : c.ink,
+                  }}
+                >
+                  {r.label}
+                </Text>
+                {!r.done ? <Icon name="chevronRight" size={ICON_SIZE.xs} color={c.primary} /> : null}
+              </TouchableOpacity>
+            ))}
+            <Text style={{ fontSize: t.caption.size, color: c.faint, marginTop: s.sm }}>
+              Availability depends on IRCTC — being ready doesn't guarantee a seat.
+            </Text>
+          </Card>
+        </>
+      ) : (
+        <Card style={{ paddingVertical: s.md }}>
+          <EmptyState
+            icon="train"
+            title="Plan your first Tatkal"
+            message="Add your train, date and passengers once. We'll count down to the window and fill the form for you."
+            actionLabel="Add a trip"
+            onAction={() => nav.go({ name: 'tripSetup' })}
+          />
+        </Card>
       )}
 
-      {trips.length > 0 && (
-        <TouchableOpacity
-          style={styles.newTrip}
-          onPress={() => nav.go({ name: 'tripSetup' })}
-        >
-          <Text style={styles.newTripText}>+ New trip</Text>
-        </TouchableOpacity>
-      )}
-
-      {/* Quick controls */}
-      <Text style={styles.section}>Quick Control</Text>
-      <View style={styles.grid}>
-        <TouchableOpacity
-          style={styles.tile}
-          onPress={() => goTile('irctcAccount')}
-        >
-          <View style={[styles.tileIcon, { backgroundColor: '#1D2B4D' }]}>
-            <Text style={styles.tileEmoji}>👤</Text>
-          </View>
-          <Text style={styles.tileTitle}>Account</Text>
-          <Text style={styles.tileSub}>IRCTC Credentials</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.tile}
-          onPress={() => goTile('passengers')}
-        >
-          <View style={[styles.tileIcon, { backgroundColor: '#3A2E1B' }]}>
-            <Text style={styles.tileEmoji}>👥</Text>
-          </View>
-          <Text style={styles.tileTitle}>Master List</Text>
-          <Text style={styles.tileSub}>
-            {travellerCount} Saved Profile{travellerCount === 1 ? '' : 's'}
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.tile} onPress={() => goTile('pnr')}>
-          <View style={[styles.tileIcon, { backgroundColor: '#3A1D22' }]}>
-            <Text style={styles.tileEmoji}>🎫</Text>
-          </View>
-          <Text style={styles.tileTitle}>PNR Status</Text>
-          <Text style={styles.tileSub}>Check live status</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.tile}
-          onPress={() => goTile('trainLookup')}
-        >
-          <View style={[styles.tileIcon, { backgroundColor: '#1D3A33' }]}>
-            <Text style={styles.tileEmoji}>🚂</Text>
-          </View>
-          <Text style={styles.tileTitle}>Train Lookup</Text>
-          <Text style={styles.tileSub}>Find train numbers</Text>
-        </TouchableOpacity>
+      {/* Shortcuts list */}
+      <Text style={[styles.sectionLabel, { color: c.muted, marginTop: s.xl }]}>YOUR STUFF</Text>
+      <View style={{ gap: s.sm }}>
+        <ListRow
+          title="Passengers"
+          subtitle={`${passengerCount} saved`}
+          icon="users"
+          onPress={() => nav.go({ name: 'passengers' })}
+          accessibilityLabel={`Passengers, ${passengerCount} saved. Open passenger profiles.`}
+        />
+        <ListRow
+          title="My PNRs"
+          subtitle={`${pnrCount} tracked`}
+          icon="ticket"
+          onPress={() => nav.go({ name: 'pnr' })}
+          accessibilityLabel={`PNRs, ${pnrCount} saved. Open PNR tracking.`}
+        />
+        <ListRow
+          title="Privacy"
+          subtitle="Everything stays on this phone"
+          icon="lock"
+          onPress={() => nav.go(shellRoute('security'))}
+          accessibilityLabel="Data stored on this device. Open security details."
+        />
       </View>
 
-      <TouchableOpacity
-        style={styles.login}
-        onPress={() => nav.go({ name: 'irctcLogin' })}
-      >
-        <Text style={styles.loginText}>
-          🔑 Log in to IRCTC (before the window opens)
-        </Text>
-      </TouchableOpacity>
-    </ScrollView>
+      <View style={{ height: s.xl }} />
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: C.navy },
-  inner: { padding: 16, paddingBottom: 32 },
-  header: { flexDirection: 'row', alignItems: 'center', marginBottom: 18 },
-  logo: {
-    width: 46,
-    height: 46,
-    borderRadius: 14,
-    backgroundColor: C.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  logoBolt: { fontSize: 24, color: '#fff' },
-  brand: { color: '#F2F5FA', fontSize: 22, fontWeight: '800' },
-  brandAccent: { color: C.violet },
-  tagline: {
-    color: C.teal,
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 2,
-    marginTop: 2,
-  },
-  stats: { flexDirection: 'row', gap: 12, marginBottom: 20 },
-  stat: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: C.surface,
-    borderRadius: 16,
-    padding: 14,
-    gap: 12,
-  },
-  statIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  statEmoji: { fontSize: 18, color: C.teal, fontWeight: '800' },
-  statLabel: {
-    color: C.faint,
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 1,
-  },
-  statValue: { color: '#F2F5FA', fontSize: 20, fontWeight: '800', marginTop: 2 },
-  section: {
-    color: '#F2F5FA',
-    fontSize: 19,
-    fontWeight: '800',
-    marginBottom: 12,
-    marginTop: 4,
-  },
-  cards: { gap: 12, paddingRight: 16 },
-  tripCard: {
-    width: CARD_W,
-    borderRadius: 20,
-    overflow: 'hidden',
-    backgroundColor: C.surface,
-  },
-  tripTop: { backgroundColor: C.primary, padding: 16, paddingBottom: 14 },
-  liveDot: {
-    color: '#EDE9FE',
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 1.5,
-    marginBottom: 6,
-  },
-  dot: { color: C.teal },
-  trainLine: { color: '#fff', fontSize: 21, fontWeight: '800' },
-  cardTools: {
-    flexDirection: 'row',
-    gap: 14,
-    marginTop: 8,
-  },
-  tool: { color: '#EDE9FE', fontSize: 13, fontWeight: '700' },
-  toolDanger: { color: '#FFD7D7' },
-  tripBody: { padding: 16 },
-  route: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 14,
-  },
-  station: { flex: 1 },
-  toStation: { alignItems: 'flex-end' },
-  code: { color: '#F2F5FA', fontSize: 26, fontWeight: '800' },
-  toCode: { color: C.violet },
-  stationName: {
-    color: C.faint,
-    fontSize: 11,
-    fontWeight: '600',
-    letterSpacing: 1,
-    marginTop: 2,
-  },
-  trainIcon: { fontSize: 22, marginHorizontal: 8 },
-  meta: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 10,
-  },
-  metaCell: { flex: 1 },
-  metaLabel: {
-    color: C.faint,
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 1,
-    marginBottom: 4,
-  },
-  metaValue: { color: '#F2F5FA', fontSize: 14, fontWeight: '700' },
-  quota: { color: C.teal },
-  opens: { color: C.teal, fontSize: 12, fontWeight: '700', marginBottom: 12 },
-  launch: {
-    backgroundColor: C.primary,
-    borderRadius: 14,
-    padding: 15,
-    alignItems: 'center',
-  },
-  launchText: { color: '#fff', fontSize: 16, fontWeight: '800' },
-  newTrip: {
-    borderColor: C.primary,
-    borderWidth: 1.5,
-    borderRadius: 14,
-    padding: 14,
-    alignItems: 'center',
-    marginTop: 12,
-  },
-  newTripText: { color: C.violet, fontSize: 15, fontWeight: '800' },
-  emptyCard: {
-    backgroundColor: C.surface,
-    borderRadius: 20,
-    padding: 22,
-    alignItems: 'center',
-  },
-  emptyTitle: { color: '#F2F5FA', fontSize: 17, fontWeight: '800' },
-  emptySub: {
-    color: C.faint,
-    fontSize: 13,
-    textAlign: 'center',
-    marginTop: 6,
-    marginBottom: 16,
-    lineHeight: 19,
-  },
-  grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  tile: {
-    width: '48%',
-    flexGrow: 1,
-    backgroundColor: C.surface,
-    borderRadius: 18,
-    padding: 16,
-  },
-  tileIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 13,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
-  },
-  tileEmoji: { fontSize: 21 },
-  tileTitle: { color: '#F2F5FA', fontSize: 16, fontWeight: '800' },
-  tileSub: { color: C.faint, fontSize: 12, marginTop: 3 },
-  login: {
-    borderColor: C.surface2,
-    borderWidth: 1,
-    borderRadius: 14,
-    padding: 14,
-    alignItems: 'center',
-    marginTop: 12,
-  },
-  loginText: { color: C.faint, fontSize: 14, fontWeight: '600' },
+  loading: { paddingVertical: 8 },
+  hero: { overflow: 'hidden' },
+  glow: { position: 'absolute', width: 220, height: 220, borderRadius: 110, top: -110, right: -70, opacity: 0.08 },
+  heroPad: { paddingHorizontal: 20, paddingTop: 18 },
+  heroPad2: { paddingHorizontal: 20, paddingBottom: 20 },
+  heroTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 },
+  heroTag: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14 },
+  heroTagText: { fontSize: 11, fontWeight: '800', letterSpacing: 1 },
+  heroEdit: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, minHeight: 36, borderRadius: 18, borderWidth: 1 },
+  heroRoute: { flexDirection: 'row', alignItems: 'flex-end' },
+  stationCol: { width: '30%' },
+  stationLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 1.2, opacity: 0.7, marginBottom: 2 },
+  stationCode: { fontSize: 40, lineHeight: 46, fontWeight: '900', letterSpacing: -1 },
+  track: { flex: 1, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, marginBottom: 14 },
+  trackDot: { width: 9, height: 9, borderRadius: 5, borderWidth: 2 },
+  trackLine: { flex: 1, borderTopWidth: 2, borderStyle: 'dashed', opacity: 0.55 },
+  trackBadge: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginHorizontal: 4 },
+  trainLine: { fontSize: 14, fontWeight: '700', opacity: 0.92, marginTop: 10 },
+  perfRow: { flexDirection: 'row', alignItems: 'center', marginVertical: 16 },
+  perf: { flex: 1, borderTopWidth: 1.5, borderStyle: 'dashed', opacity: 0.35, marginHorizontal: 6 },
+  notch: { width: 22, height: 22, borderRadius: 11 },
+  notchL: { marginLeft: -11 },
+  notchR: { marginRight: -11 },
+  factsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 16 },
+  statusPill: { flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 16, padding: 12 },
+  statusIcon: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  statusTitle: { fontSize: 15, fontWeight: '800' },
+  statusSub: { fontSize: 12.5, lineHeight: 17, opacity: 0.85, marginTop: 2 },
+  countWrap: { paddingVertical: 16, paddingHorizontal: 8 },
+  heroCta: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 56, marginTop: 16, paddingLeft: 24, paddingRight: 8 },
+  ctaArrow: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  checkRow: { flexDirection: 'row', alignItems: 'center', minHeight: 40, gap: 10 },
+  checkDot: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  sectionLabel: { fontSize: 12, fontWeight: '800', letterSpacing: 1, marginBottom: 8 },
 });

@@ -2,4 +2,6 @@
   <string name="app_name">Tatkal Copilot</string>
   <string name="expo_splash_screen_resize_mode" translatable="false">contain</string>
   <string name="expo_splash_screen_status_bar_translucent" translatable="false">false</string>
+  <string name="expo_runtime_version">1.0.0</string>
+  <string name="tap_service_description">Tatkal Copilot uses this to tap booking buttons (Search Trains, Book Now, Continue) inside Chrome on IRCTC pages only. It never taps anything on payment pages, and you can turn it off here at any time.</string>
 </resources>

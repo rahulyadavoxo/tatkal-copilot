@@ -10,7 +10,8 @@
                     #quota (select: TATKAL/GN)
     Passengers:     4 blocks pax0..pax3 (Tatkal caps at 4 passengers per PNR), each with
                     #pax{i}Name (text), #pax{i}Age (text),
-                    #pax{i}Gender (select: M/F/O), #pax{i}Berth (select: LB/MB/UB/SL/SU/WS)
+                    #pax{i}Gender (select: M/F/O), #pax{i}Berth (select: LB/MB/UB/SL/SU/WS),
+                    #pax{i}Catering (select: Veg/Non Veg/Jain Meal/Veg (Diabetic)/Non Veg (Diabetic))
     Booking submit: form#tatkalForm, button#bookNowBtn
                     (harness traps: window.__formSubmits, window.__bookClicks)
     OTP state:      div#otpScreen (visible only in ?state=otp), input#otpInput
@@ -124,6 +125,7 @@
   var paxBlocks = document.getElementById('paxBlocks');
   var genders = ['M','F','O'];
   var berths = ['LB','MB','UB','SL','SU','WS'];
+  var meals = ['Veg','Non Veg','Jain Meal','Veg (Diabetic)','Non Veg (Diabetic)'];
   for (var i = 0; i < 4; i++) {
     (function(i){
       var div = document.createElement('div');
@@ -135,7 +137,9 @@
         '<label for="pax'+i+'Gender">Gender</label><select id="pax'+i+'Gender"><option value="">--</option>' +
           genders.map(function(g){ return '<option>'+g+'</option>'; }).join('') + '</select><br>' +
         '<label for="pax'+i+'Berth">Berth</label><select id="pax'+i+'Berth"><option value="">--</option>' +
-          berths.map(function(b){ return '<option>'+b+'</option>'; }).join('') + '</select>';
+          berths.map(function(b){ return '<option>'+b+'</option>'; }).join('') + '</select><br>' +
+        '<label for="pax'+i+'Catering">Catering Service Option</label><select id="pax'+i+'Catering"><option value="">--</option>' +
+          meals.map(function(m){ return '<option>'+m+'</option>'; }).join('') + '</select>';
       paxBlocks.appendChild(div);
     })(i);
   }
@@ -151,7 +155,9 @@
       '<label for="pax'+n+'Gender">Gender</label><select id="pax'+n+'Gender"><option value="">--</option>' +
         genders.map(function(g){ return '<option>'+g+'</option>'; }).join('') + '</select><br>' +
       '<label for="pax'+n+'Berth">Berth</label><select id="pax'+n+'Berth"><option value="">--</option>' +
-        berths.map(function(b){ return '<option>'+b+'</option>'; }).join('') + '</select>';
+        berths.map(function(b){ return '<option>'+b+'</option>'; }).join('') + '</select><br>' +
+      '<label for="pax'+n+'Catering">Catering Service Option</label><select id="pax'+n+'Catering"><option value="">--</option>' +
+        meals.map(function(m){ return '<option>'+m+'</option>'; }).join('') + '</select>';
     paxBlocks.appendChild(div);
   });
 

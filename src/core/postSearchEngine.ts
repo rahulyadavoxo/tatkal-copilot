@@ -24,7 +24,8 @@
  *   confirmation). It never touches payment, never enters payment details,
  *   never solves a CAPTCHA or OTP (both halt the engine for manual work).
  * - No form.submit() / requestSubmit() anywhere; scanPostSearchForViolations
- *   asserts this plus the absence of any payment-gateway interaction.
+ *   asserts this plus the absence of any payment-gateway interaction —
+ *   in CI/harness, not at runtime in the shipped app.
  * - Every step is idempotent: a re-run skips what is already done (e.g. the
  *   train list already showing skips tapSearch).
  */
@@ -122,7 +123,7 @@ var PLAN = ${planJson};
 var SEED = ${seed};
 var log = (window.__tatkalEventLog = window.__tatkalEventLog || []);
 function post(type, data){
-  var e = { type: type, t: Math.round(performance.now()), data: data || {} };
+  var e = { type: type, t: Math.round(performance.now()), seed: SEED, data: data || {} };
   log.push(e);
   try {
     if (window.ReactNativeWebView && window.ReactNativeWebView.postMessage) {
@@ -262,8 +263,11 @@ function findSearchButton(){
     var t = flatText(el);
     if (!t) continue;
     if (t === 'search trains') return el;
-    if (t.indexOf('search') >= 0 && t.indexOf('train') >= 0) return el;
-    if (t.indexOf('search') >= 0 && !fallback) fallback = el;
+    // The live page sometimes renders the control as a bare "Search" link
+    // (seen on-device 2026-09-29) — an exact "search" is the only other
+    // acceptable label. Anything merely *containing* "search" (Search PNR,
+    // Search Stations, ...) must never be tapped.
+    if (t === 'search' && !fallback) fallback = el;
   }
   if (fallback) return fallback;
   // Last resort: a div/span whose whole text is exactly "Search Trains" —
@@ -301,22 +305,46 @@ async function stepWaitList(){
 }
 
 // ---------- step 2: find the train's card, tap class tab + date, tap Book Now ----------
+// "book"+"now": matches "Book Now" but never "Re-Book Favourite".
+function bookNowish(el){
+  if (!visible(el)) return false;
+  var bt = norm(el.tagName === 'INPUT' ? (el.getAttribute('value') || '')
+                                       : (el.innerText || el.textContent || ''));
+  return bt === 'book now' || (bt.indexOf('book') >= 0 && bt.indexOf('now') >= 0);
+}
+function bookNowCount(scope){
+  var bs = scope.querySelectorAll('button, input[type="submit"], input[type="button"]');
+  var n = 0;
+  for (var i = 0; i < bs.length; i++) if (bookNowish(bs[i])) n++;
+  return n;
+}
 function findTrainCard(trainNo){
+  // Score every Book Now button's ancestor chain: the train's card is the
+  // SMALLEST ancestor whose subtree holds the wanted train number and
+  // exactly one visible Book Now. A shared list container (many Book Nows)
+  // can never win, so the first button in document order cannot shadow the
+  // wanted train's own card with a wrong ancestor.
   var btns = document.querySelectorAll('button, input[type="submit"], input[type="button"]');
+  var best = null, bestDepth = 1e9;
   for (var i = 0; i < btns.length; i++) {
-    var bt = norm(btns[i].tagName === 'INPUT'
-      ? (btns[i].getAttribute('value') || '')
-      : (btns[i].innerText || btns[i].textContent || ''));
-    // "book"+"now": matches "Book Now" but never "Re-Book Favourite".
-    if (bt !== 'book now' && (bt.indexOf('book') < 0 || bt.indexOf('now') < 0)) continue;
-    if (!visible(btns[i])) continue;
+    if (!bookNowish(btns[i])) continue;
     var p = btns[i].parentElement;
     for (var d = 0; d < 8 && p; d++, p = p.parentElement) {
       var t = p.innerText || '';
-      if (t.indexOf(trainNo) !== -1) return p;
+      if (t.indexOf(trainNo) !== -1 && bookNowCount(p) === 1 && d < bestDepth) {
+        best = p; bestDepth = d;
+      }
     }
   }
-  return null;
+  return best;
+}
+// Belt-and-braces before the Book Now tap: the card must still be the wanted
+// train's own card (one Book Now, train number present) — never a container
+// that came to hold several trains after a re-render.
+function cardVerified(card, trainNo){
+  var t = '';
+  try { t = card.innerText || ''; } catch (e) {}
+  return t.indexOf(trainNo) !== -1 && bookNowCount(card) === 1;
 }
 var KNOWN_CLASSES = ['1A','2A','3A','SL','2S','CC','EC','FC','3E','EA','EV','VC','VS'];
 function classTabs(card){
@@ -366,6 +394,93 @@ function findDateCard(card, dateCard){
   }
   return best;
 }
+// Selected-state read-back after a tap. A tap that didn't register leaves the
+// page on the wrong class/date; the engine must halt instead of booking it.
+function isActiveEl(el){
+  var cls = ' ' + norm((el.className || '').toString()) + ' ';
+  if (cls.indexOf('active') >= 0 || cls.indexOf('selected') >= 0 ||
+      cls.indexOf('p-highlight') >= 0 || cls.indexOf('ui-state-active') >= 0) return true;
+  try {
+    if (el.getAttribute('aria-selected') === 'true' ||
+        el.getAttribute('aria-pressed') === 'true') return true;
+  } catch (e) {}
+  return false;
+}
+// True when the wanted class is provably selected, or when the page exposes
+// no selection markers at all (then there is nothing to verify against).
+function classSelectionStuck(card, code){
+  var tabs = classTabs(card);
+  if (!tabs.length) return false;
+  var anyActive = false;
+  for (var i = 0; i < tabs.length; i++) {
+    if (!isActiveEl(tabs[i].el)) continue;
+    anyActive = true;
+    if (tabs[i].code === code) return true;
+  }
+  return !anyActive; // no markers anywhere — cannot verify, trust the tap
+}
+function dateSelectionStuck(card, dateCard){
+  var els = card.querySelectorAll('button, div, li, span, a');
+  var want = norm(dateCard);
+  var wantAlt = want.replace(/^0/, '');
+  var anyActive = false;
+  for (var i = 0; i < els.length; i++) {
+    if (!visible(els[i]) || !isActiveEl(els[i])) continue;
+    anyActive = true;
+    var t = norm(els[i].innerText || '');
+    if (t.indexOf(want) !== -1 || t.indexOf(wantAlt) !== -1) return true;
+  }
+  return !anyActive; // no markers anywhere — cannot verify, trust the tap
+}
+// The availability selector holds the journey date AND an availability
+// marker ("AVAILABLE-0136", "WL35", "RAC12"). Requiring both excludes the
+// card header's journey-date text — the old smallest-date-match tapped that
+// decoy (seen on-device 2026-10-07: header "Thu, 08 Oct" won over the
+// availability box), the tap did nothing, and Book Now stayed disabled.
+function availMarker(t){
+  return /available|waiting|wl|rac|regret/.test(t);
+}
+function findAvailabilityBox(card, dateCard){
+  var els = card.querySelectorAll('button, div, li, span, a, [role="button"], [role="option"]');
+  var want = norm(dateCard);
+  var wantAlt = want.replace(/^0/, '');
+  var best = null, bestLen = 1e9;
+  for (var i = 0; i < els.length; i++) {
+    if (!visible(els[i])) continue;
+    var t = norm(els[i].innerText || '');
+    if (t.indexOf(want) === -1 && t.indexOf(wantAlt) === -1) continue;
+    if (!availMarker(t)) continue;
+    if (t.length < bestLen) { best = els[i]; bestLen = t.length; }
+  }
+  return best;
+}
+// After tapping the availability box IRCTC sometimes opens a dropdown
+// panel: the matching option inside it must be tapped too.
+function findOpenDateOption(dateCard){
+  var els = document.querySelectorAll('[role="option"], .p-dropdown-item, .ui-dropdown-item, li');
+  var want = norm(dateCard), wantAlt = want.replace(/^0/, '');
+  var plain = null;
+  for (var i = 0; i < els.length; i++) {
+    if (!visible(els[i])) continue;
+    var t = norm(els[i].innerText || '');
+    if (t.indexOf(want) === -1 && t.indexOf(wantAlt) === -1) continue;
+    if (availMarker(t)) return els[i];
+    if (!plain) plain = els[i];
+  }
+  return plain;
+}
+// Ground truth for "the availability tap registered": IRCTC enables
+// Book Now only once a date/quota is selected for the class.
+function bookNowEnabled(book){
+  if (!book) return false;
+  try {
+    if (book.disabled) return false;
+    var cls = ' ' + norm((book.className || '').toString()) + ' ';
+    if (cls.indexOf('disabled') >= 0) return false;
+    if (book.getAttribute('aria-disabled') === 'true') return false;
+  } catch (e) {}
+  return true;
+}
 async function stepSelectTrain(){
   var card = findTrainCard(PLAN.trainNo);
   if (!card) return stepMissing('selectTrain', 'train ' + PLAN.trainNo + ' not in list');
@@ -387,19 +502,61 @@ async function stepSelectTrain(){
     // a different class; halt for the user to choose.
     return stepMissing('selectTrain', 'class ' + PLAN.classCode + ' not offered on train ' + PLAN.trainNo);
   }
+  // The code we expect to be selected after the tap ('ALL' means the first tab).
+  var expectedCode = PLAN.classCode;
+  if (expectedCode === 'ALL') {
+    var tabsNow = classTabs(card);
+    expectedCode = tabsNow.length ? tabsNow[0].code : null;
+  }
   clickEl(tab);
   await sleep(900);
   // the card may re-render after the tab tap — re-locate it
   card = findTrainCard(PLAN.trainNo) || card;
-  var dateEl = findDateCard(card, PLAN.dateCard);
-  if (!dateEl) return stepMissing('selectTrain', 'date card ' + PLAN.dateCard + ' not found');
-  clickEl(dateEl);
+  if (expectedCode && !classSelectionStuck(card, expectedCode))
+    return stepMissing('selectTrain', 'class ' + PLAN.classCode + ' did not stick');
+  var box = findAvailabilityBox(card, PLAN.dateCard) || findDateCard(card, PLAN.dateCard);
+  if (!box) return stepMissing('selectTrain', 'date card ' + PLAN.dateCard + ' not found');
+  clickEl(box);
   await sleep(900);
+  // The availability control is sometimes a dropdown: the first tap only
+  // opens the option list — then the matching option must be tapped.
+  var opt = findOpenDateOption(PLAN.dateCard);
+  if (opt) { clickEl(opt); await sleep(900); }
   card = findTrainCard(PLAN.trainNo) || card;
   var book = fuzzyButton('Book Now', card);
   if (!book) return stepMissing('bookNow', 'Book Now not in train card');
+  // A tap that didn't register leaves Book Now disabled. Retry once with
+  // real mouse events, then halt LOUD — never tap a dead button and burn
+  // 30s in waitPax (seen on-device 2026-10-07).
+  for (var att = 0; att < 2 && !bookNowEnabled(book); att++) {
+    strongClick(box);
+    await sleep(900);
+    opt = findOpenDateOption(PLAN.dateCard);
+    if (opt) { clickEl(opt); await sleep(900); }
+    card = findTrainCard(PLAN.trainNo) || card;
+    book = fuzzyButton('Book Now', card);
+    if (!book) return stepMissing('bookNow', 'Book Now not in train card');
+  }
+  if (!bookNowEnabled(book))
+    return stepMissing('bookNow', 'Book Now stayed disabled — the ' + PLAN.dateCard +
+      ' availability selection did not register');
+  // Never book a different date than the trip's.
+  if (!dateSelectionStuck(card, PLAN.dateCard))
+    return stepMissing('selectTrain', 'date ' + PLAN.dateCard + ' did not stick');
+  if (!cardVerified(card, PLAN.trainNo))
+    return stepMissing('bookNow', 'train card verification failed for ' + PLAN.trainNo);
   clickEl(book);
   await sleep(1500);
+  // The tap must have moved us off the train list (passenger page loading
+  // or the confirmation popup). Same card still on screen with no popup =
+  // the tap didn't register — retry once with real mouse events.
+  var cardGone = false;
+  try { cardGone = !document.contains(card); } catch (e) {}
+  if (!cardGone && !findPopup()) {
+    var rCard = findTrainCard(PLAN.trainNo);
+    var rBook = rCard ? fuzzyButton('Book Now', rCard) : null;
+    if (rBook && bookNowEnabled(rBook)) { strongClick(rBook); await sleep(2000); }
+  }
   return stepOk('selectTrain', { train: PLAN.trainNo, cls: PLAN.classCode });
 }
 
@@ -415,6 +572,20 @@ function findPopup(){
   }
   return null;
 }
+// The one known confirmation is the station-mismatch dialog ("You searched
+// trains from DTO to NDLS ... but booking from DTO to ANVT. Do you want to
+// continue with it?"). A bare "do you want to continue" also matches other
+// dialogs (e.g. a session-continue prompt) — those must NEVER be auto-
+// affirmed. Require station-mismatch markers: from/to station codes or
+// "boarding station" wording.
+function isStationMismatch(txt){
+  var t = norm(txt);
+  if (!/do you want to continue/i.test(t)) return false;
+  var hasStationCodes = /\\b[a-z]{2,5}\\b/.test(t) &&
+    /booking from|searched trains|boarding/.test(t);
+  var hasBoardingWord = /boarding/.test(t) && /station/.test(t);
+  return hasStationCodes || hasBoardingWord;
+}
 async function stepPopup(){
   var popup = null;
   for (var i = 0; i < 9; i++) {
@@ -425,7 +596,7 @@ async function stepPopup(){
   }
   if (!popup) { post('POPUP_NONE', {}); return true; }
   var txt = popup.innerText || '';
-  if (!/do you want to continue/i.test(txt)) { post('POPUP_UNKNOWN', { text: txt.slice(0, 160) }); return false; }
+  if (!isStationMismatch(txt)) { post('POPUP_UNKNOWN', { text: txt.slice(0, 160) }); return false; }
   var yes = popupAffirm(popup);
   if (!yes) { post('POPUP_UNKNOWN', { text: 'no Yes button' }); return false; }
   clickEl(yes);
@@ -451,15 +622,24 @@ function popupAffirm(popup){
 
 // ---------- step 4: wait for the passenger-details page ----------
 function passengerPageVisible(){
+  // Positive detection: the passenger page has passenger name/age inputs.
+  // (The old negative check — "/book now/ must be absent" — false-negatived
+  // whenever the page's header/footer mentioned Book Now.)
   var inputs = document.querySelectorAll('input');
+  var nameHits = 0, ageHits = 0;
   for (var i = 0; i < inputs.length; i++) {
     if (!visible(inputs[i])) continue;
     var ph = inputs[i].getAttribute('placeholder') || '';
     if (/full name as per govt/i.test(ph)) return true;
+    var hay = norm(ph + ' ' + (inputs[i].getAttribute('aria-label') || '') + ' ' +
+                   (inputs[i].getAttribute('name') || ''));
+    if (/name/.test(hay)) nameHits++;
+    if (/\\bage\\b/.test(hay)) ageHits++;
   }
+  if (nameHits >= 1 && ageHits >= 1) return true;
   var t = '';
   try { t = document.body ? document.body.innerText : ''; } catch (e) {}
-  return /passenger details/i.test(t) && /book now/i.test(t) === false;
+  return /passenger details/i.test(t);
 }
 async function stepWaitPax(){
   for (var i = 0; i < 43; i++) {

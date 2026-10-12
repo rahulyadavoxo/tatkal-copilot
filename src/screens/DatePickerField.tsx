@@ -2,16 +2,22 @@
  * DatePickerField — a self-contained month calendar (no native date-picker
  * dependency, so no new native modules). Constrained to IRCTC's world:
  * no past dates, max 60 days out (advance reservation period).
+ *
+ * Props API is unchanged (label / value / onSelect / placeholder? / note?).
  */
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
+  AccessibilityInfo,
   Modal,
+  Pressable,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
+  findNodeHandle,
 } from 'react-native';
-import { C } from '../theme';
+import { useTheme } from '../theme';
+import { Icon } from '../components/icons';
 
 const DOW = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
 const MONTHS = [
@@ -53,12 +59,40 @@ interface Props {
   label: string;
   value: string; // YYYY-MM-DD or ''
   onSelect: (iso: string) => void;
+  placeholder?: string;
+  note?: string;
 }
 
-export default function DatePickerField({ label, value, onSelect }: Props) {
+const DEFAULT_PLACEHOLDER = 'Select journey date';
+const DEFAULT_NOTE =
+  'Tatkal opens 1 day before the journey date · booking up to 60 days ahead';
+
+export default function DatePickerField({
+  label,
+  value,
+  onSelect,
+  placeholder = DEFAULT_PLACEHOLDER,
+  note = DEFAULT_NOTE,
+}: Props) {
+  const { theme } = useTheme();
+  const t = theme.typography;
   const [open, setOpen] = useState(false);
   const minISO = todayISO();
   const maxISO = addDaysISO(minISO, MAX_DAYS_OUT);
+  const titleRef = useRef<Text>(null);
+
+  // Move screen-reader focus into the sheet when it opens, so the picker
+  // is announced instead of leaving focus behind the modal.
+  useEffect(() => {
+    if (!open) return;
+    const timer = setTimeout(() => {
+      const tag = findNodeHandle(titleRef.current);
+      if (typeof tag === 'number') AccessibilityInfo.setAccessibilityFocus(tag);
+    }, 400);
+    return () => clearTimeout(timer);
+  }, [open ]);
+
+  const close = () => setOpen(false);
 
   // month cursor: first of the month containing `value`, else this month
   const initial = value || minISO;
@@ -90,43 +124,144 @@ export default function DatePickerField({ label, value, onSelect }: Props) {
 
   const pick = (iso: string) => {
     onSelect(iso);
-    setOpen(false);
+    close();
   };
 
   return (
     <View>
-      <Text style={styles.label}>{label}</Text>
+      <Text
+        style={{
+          fontSize: t.bodySm.size,
+          fontWeight: '600',
+          lineHeight: t.bodySm.lineHeight,
+          color: theme.colors.ink,
+          marginBottom: theme.spacing.xs,
+        }}
+      >
+        {label}
+      </Text>
       <TouchableOpacity
-        style={styles.input}
+        style={{
+          minHeight: 48,
+          backgroundColor: theme.colors.surface,
+          borderWidth: 1.5,
+          borderColor: theme.colors.line,
+          borderRadius: theme.radius.md,
+          paddingHorizontal: theme.spacing.md,
+          flexDirection: 'row',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+        accessibilityRole="button"
+        accessibilityLabel={
+          value ? `Pick journey date, currently ${formatLong(value)}` : 'Pick journey date'
+        }
         onPress={() => {
           setCursor((value || minISO).slice(0, 7));
           setOpen(true);
         }}
       >
-        <Text style={[styles.inputText, !value && styles.placeholder]}>
-          {value ? formatLong(value) : 'Select journey date'}
+        <Text
+          style={{
+            fontSize: t.body.size,
+            lineHeight: t.body.lineHeight,
+            color: value ? theme.colors.ink : theme.colors.faint,
+          }}
+        >
+          {value ? formatLong(value) : placeholder}
         </Text>
-        <Text style={styles.calIcon}>📅</Text>
+        <Icon
+          name="calendar"
+          size={20}
+          color={theme.colors.muted}
+          accessibilityLabel="Open calendar"
+        />
       </TouchableOpacity>
 
-      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
-        <View style={styles.overlay}>
-          <View style={styles.sheet}>
+      <Modal visible={open} transparent animationType="fade" onRequestClose={close}>
+        <Pressable
+          style={[
+            styles.overlay,
+            { backgroundColor: theme.colors.overlay, padding: theme.spacing.xl },
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel="Dismiss date picker"
+          onPress={close}
+        >
+          {/* Inner pressable swallows touches so taps inside the sheet don't
+              dismiss it; accessible={false} keeps it out of the a11y tree. */}
+          <Pressable
+            style={[
+              styles.sheet,
+              {
+                backgroundColor: theme.colors.surface,
+                borderColor: theme.colors.line,
+                borderRadius: theme.radius.lg,
+                padding: theme.spacing.lg,
+                ...theme.elevation.lg,
+              },
+            ]}
+            accessible={false}
+            onPress={() => undefined}
+          >
             <View style={styles.header}>
-              <TouchableOpacity onPress={prevMonth} disabled={!canPrev} style={styles.navBtn}>
-                <Text style={[styles.navText, !canPrev && styles.navDisabled]}>‹</Text>
+              <TouchableOpacity
+                onPress={prevMonth}
+                disabled={!canPrev}
+                style={styles.navBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Previous month"
+                accessibilityState={{ disabled: !canPrev }}
+              >
+                <Text
+                  style={[
+                    styles.navText,
+                    { color: canPrev ? theme.colors.primary : theme.colors.faint },
+                  ]}
+                >
+                  ‹
+                </Text>
               </TouchableOpacity>
-              <Text style={styles.monthTitle}>
+              <Text
+                ref={titleRef}
+                style={{
+                  fontSize: t.h3.size,
+                  fontWeight: t.h3.weight,
+                  lineHeight: t.h3.lineHeight,
+                  color: theme.colors.ink,
+                }}
+                accessibilityLabel={`Journey date picker, ${MONTHS[cm - 1]} ${cy}`}
+              >
                 {MONTHS[cm - 1]} {cy}
               </Text>
-              <TouchableOpacity onPress={nextMonth} disabled={!canNext} style={styles.navBtn}>
-                <Text style={[styles.navText, !canNext && styles.navDisabled]}>›</Text>
+              <TouchableOpacity
+                onPress={nextMonth}
+                disabled={!canNext}
+                style={styles.navBtn}
+                accessibilityRole="button"
+                accessibilityLabel="Next month"
+                accessibilityState={{ disabled: !canNext }}
+              >
+                <Text
+                  style={[
+                    styles.navText,
+                    { color: canNext ? theme.colors.primary : theme.colors.faint },
+                  ]}
+                >
+                  ›
+                </Text>
               </TouchableOpacity>
             </View>
 
             <View style={styles.grid}>
               {DOW.map((d) => (
-                <Text key={d} style={styles.dow}>
+                <Text
+                  key={d}
+                  style={[
+                    styles.dow,
+                    { color: theme.colors.muted, fontSize: t.caption.size },
+                  ]}
+                >
                   {d}
                 </Text>
               ))}
@@ -141,16 +276,26 @@ export default function DatePickerField({ label, value, onSelect }: Props) {
                     return (
                       <TouchableOpacity
                         key={c.iso}
-                        style={[styles.cell, isSel && styles.cellSel]}
+                        style={[
+                          styles.cell,
+                          isSel && {
+                            backgroundColor: theme.colors.primary,
+                            borderRadius: 20,
+                          },
+                        ]}
                         disabled={disabled}
+                        accessibilityRole="button"
+                        accessibilityLabel={formatLong(c.iso)}
+                        accessibilityState={{ selected: isSel, disabled }}
                         onPress={() => pick(c.iso)}
                       >
                         <Text
                           style={[
                             styles.day,
-                            disabled && styles.dayDisabled,
-                            isSel && styles.daySel,
-                            isToday && !isSel && styles.dayToday,
+                            { color: theme.colors.ink },
+                            disabled && { color: theme.colors.faint },
+                            isSel && { color: theme.colors.onPrimary, fontWeight: '800' },
+                            isToday && !isSel && { color: theme.colors.primary, fontWeight: '800' },
                           ]}
                         >
                           {c.day}
@@ -162,46 +307,47 @@ export default function DatePickerField({ label, value, onSelect }: Props) {
               )}
             </View>
 
-            <Text style={styles.note}>
-              Tatkal opens 1 day before the journey date · booking up to 60 days ahead
+            <Text
+              style={{
+                fontSize: t.caption.size,
+                lineHeight: t.caption.lineHeight,
+                color: theme.colors.muted,
+                textAlign: 'center',
+                marginTop: theme.spacing.sm,
+              }}
+            >
+              {note}
             </Text>
-            <TouchableOpacity style={styles.cancel} onPress={() => setOpen(false)}>
-              <Text style={styles.cancelText}>Cancel</Text>
+            <TouchableOpacity
+              style={styles.cancel}
+              accessibilityRole="button"
+              accessibilityLabel="Cancel, close date picker"
+              onPress={close}
+            >
+              <Text
+                style={{
+                  fontSize: t.bodySm.size,
+                  fontWeight: '600',
+                  color: theme.colors.ink,
+                }}
+              >
+                Cancel
+              </Text>
             </TouchableOpacity>
-          </View>
-        </View>
+          </Pressable>
+        </Pressable>
       </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  label: { color: C.muted, fontSize: 13, marginTop: 10, marginBottom: 6 },
-  input: {
-    backgroundColor: C.card,
-    borderColor: C.line,
-    borderWidth: 1,
-    borderRadius: 8,
-    padding: 11,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  inputText: { color: C.ink, fontSize: 15 },
-  placeholder: { color: C.muted },
-  calIcon: { fontSize: 18 },
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
     justifyContent: 'center',
-    padding: 24,
   },
   sheet: {
-    backgroundColor: C.card,
-    borderColor: C.line,
     borderWidth: 1,
-    borderRadius: 14,
-    padding: 16,
   },
   header: {
     flexDirection: 'row',
@@ -209,31 +355,34 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 12,
   },
-  navBtn: { padding: 8, minWidth: 40, alignItems: 'center' },
-  navText: { color: C.lime, fontSize: 26, fontWeight: '800' },
-  navDisabled: { color: C.line },
-  monthTitle: { color: C.ink, fontSize: 16, fontWeight: '800' },
+  navBtn: {
+    padding: 8,
+    minWidth: 44,
+    minHeight: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  navText: { fontSize: 26, fontWeight: '800' },
   grid: { flexDirection: 'row', flexWrap: 'wrap' },
   dow: {
     width: '14.28%',
     textAlign: 'center',
-    color: C.muted,
-    fontSize: 11,
     fontWeight: '700',
     marginBottom: 6,
   },
   cell: {
     width: '14.28%',
     aspectRatio: 1,
+    minHeight: 44,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  cellSel: { backgroundColor: C.lime, borderRadius: 20 },
-  day: { color: C.ink, fontSize: 14 },
-  dayDisabled: { color: '#3a3f35' },
-  daySel: { color: C.bg, fontWeight: '800' },
-  dayToday: { color: C.lime, fontWeight: '800' },
-  note: { color: C.muted, fontSize: 11, textAlign: 'center', marginTop: 10 },
-  cancel: { alignItems: 'center', padding: 12, marginTop: 4 },
-  cancelText: { color: C.ink, fontSize: 14, fontWeight: '600' },
+  day: { fontSize: 14 },
+  cancel: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 12,
+    minHeight: 44,
+    marginTop: 4,
+  },
 });

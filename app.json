@@ -3,13 +3,17 @@
     "android": {
       "package": "com.tatkalcopilot.app",
       "permissions": [],
-      "softwareKeyboardLayoutMode": "pan"
+      "softwareKeyboardLayoutMode": "pan",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#5B3DF5"
+      }
     },
     "assetBundlePatterns": [
       "**/*"
     ],
     "extra": {
-      "_privacyNote": "Deliberately NO RECEIVE_SMS / READ_SMS permission. OTP is read via the Android SMS User Consent API (system one-tap dialog, no broad SMS permission) — see docs/IRCTC_RULES.md §5. The WebView may only load irctc.co.in (see src/core/privacy.ts, gate G9).",
+      "_privacyNote": "Deliberately NO RECEIVE_SMS / READ_SMS permission. OTP is read via the Android SMS User Consent API (system one-tap dialog, no broad SMS permission) \u2014 see docs/IRCTC_RULES.md \u00a75. The WebView may only load irctc.co.in (see src/core/privacy.ts, gate G9).",
       "eas": {
         "projectId": "78f995bf-f09a-40b6-b749-73c8e5805a6c"
       }
@@ -27,9 +31,16 @@
     "scheme": "tatkalcopilot",
     "slug": "tatkal-copilot",
     "splash": {
-      "backgroundColor": "#0B1210"
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0A0A0F"
     },
-    "userInterfaceStyle": "light",
+    "updates": {
+      "url": "https://u.expo.dev/78f995bf-f09a-40b6-b749-73c8e5805a6c",
+      "checkAutomatically": "ON_ERROR_RECOVERY"
+    },
+    "runtimeVersion": "1.0.0",
+    "userInterfaceStyle": "automatic",
     "version": "0.1.0",
     "owner": "elishb534-2s-team"
   }

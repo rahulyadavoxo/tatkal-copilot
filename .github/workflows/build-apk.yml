@@ -1,0 +1,55 @@
+name: Build Android APK
+
+# Builds the release APK on GitHub's servers (no Expo build quota needed).
+# Signs with the same Expo-managed keystore as previous releases, so the APK
+# installs as an update over the existing app. Trigger manually from the
+# Actions tab, or via the API (workflow_dispatch).
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install JS dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install required SDK packages
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Restore signing keystore
+        run: echo "${{ secrets.ANDROID_KEYSTORE_B64 }}" | base64 --decode > "$RUNNER_TEMP/tatkal-release.jks"
+
+      - name: Build release APK
+        run: >
+          ./gradlew assembleRelease
+          -Pandroid.injected.signing.store.file="$RUNNER_TEMP/tatkal-release.jks"
+          -Pandroid.injected.signing.store.password="${{ secrets.KEYSTORE_PASSWORD }}"
+          -Pandroid.injected.signing.key.alias="${{ secrets.KEY_ALIAS }}"
+          -Pandroid.injected.signing.key.password="${{ secrets.KEY_PASSWORD }}"
+        working-directory: android
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: tatkal-copilot-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
