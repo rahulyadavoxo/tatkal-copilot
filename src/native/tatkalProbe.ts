@@ -145,6 +145,45 @@ export async function setAutomationEnabled(on: boolean): Promise<void> {
  * Syncs the current automation data for a trip to the native encrypted
  * prefs. Call on app start and whenever trips/passengers change.
  */
+/**
+ * Keeps the native tap service's choreography map + fill data fresh even
+ * when booking starts from the Quick Settings tile (which never passes
+ * through BookingScreen). Picks the nearest upcoming trip (else the most
+ * recent one). With no trip at all it still writes the maps, so the
+ * language and login steps work. Called on app launch and on resume.
+ */
+export async function syncLatestAutomationData(): Promise<boolean> {
+  try {
+    if (Platform.OS !== 'android' || !M?.writeAutofillData) return false;
+    const { loadPassengers, loadTrips, loadIrctcCredentials } = await import('../vaultStore');
+    const { buildFillData, DEFAULT_CHOREO_MAP, DEFAULT_FIELD_MAP } =
+      await import('./autofillData');
+    const [trips, passengers, creds] = await Promise.all([
+      loadTrips(),
+      loadPassengers(),
+      loadIrctcCredentials(),
+    ]);
+    const today = new Date().toISOString().slice(0, 10);
+    const sorted = [...trips].sort((a, b) => a.journeyDate.localeCompare(b.journeyDate));
+    const trip =
+      sorted.find((t) => t.journeyDate >= today) ?? sorted[sorted.length - 1];
+    let fill: Record<string, string> = {};
+    if (trip) {
+      fill = buildFillData(trip, passengers, creds);
+    } else {
+      if (creds?.username) fill['irctc.username'] = creds.username;
+      if (creds?.password) fill['irctc.password'] = creds.password;
+    }
+    return await writeAutofillData(
+      JSON.stringify(DEFAULT_FIELD_MAP),
+      JSON.stringify(DEFAULT_CHOREO_MAP),
+      JSON.stringify(fill),
+    );
+  } catch {
+    return false;
+  }
+}
+
 export async function syncAutofillData(tripId: string): Promise<boolean> {
   try {
     if (Platform.OS !== 'android' || !M?.writeAutofillData) return false;
