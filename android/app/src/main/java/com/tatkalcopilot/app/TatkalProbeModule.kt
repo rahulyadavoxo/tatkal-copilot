@@ -76,6 +76,35 @@ class TatkalProbeModule(private val reactContext: ReactApplicationContext) :
         reactContext.startActivity(intent)
     }
 
+    /**
+     * Opens a URL in the real Chrome app (not a Custom Tab, not the WebView).
+     * The automation services gate on real-browser packages, so the full
+     * Chrome app is the only target that guarantees both the fill service
+     * and the tap service engage. Falls back to the default browser when
+     * Chrome isn't installed.
+     */
+    @ReactMethod
+    fun openInChromeApp(url: String, promise: Promise) {
+        try {
+            val chromeIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                setPackage("com.android.chrome")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            try {
+                reactContext.startActivity(chromeIntent)
+                promise.resolve("chrome")
+            } catch (_: Exception) {
+                val fallback = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                reactContext.startActivity(fallback)
+                promise.resolve("fallback")
+            }
+        } catch (e: Exception) {
+            promise.reject("ERR", e)
+        }
+    }
+
     @ReactMethod
     fun getProbeReport(promise: Promise) {
         try {

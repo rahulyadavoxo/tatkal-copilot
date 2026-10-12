@@ -58,7 +58,6 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import * as WebBrowser from 'expo-web-browser';
 import * as SecureStore from 'expo-secure-store';
 import WebView, { type WebViewInstance } from '../webview';
 import type { WebViewMessageEvent } from 'react-native-webview';
@@ -96,7 +95,7 @@ import {
   type PostSearchPlan,
 } from '../core/postSearchEngine';
 import { buildReviewScript, type ReviewPaymentMode, type ReviewPlan } from '../core/reviewEngine';
-import { syncAutofillData } from '../native/tatkalProbe';
+import { syncAutofillData, openInChromeApp } from '../native/tatkalProbe';
 import {
   buildPaymentScript,
   type PaymentMethodChoice,
@@ -767,23 +766,28 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
   }, []);
 
   // Genuine Chrome tab (Custom Tabs): real browser identity, shared cookies
-  // with the user's Chrome — IRCTC serves it fine (verified on-device
-  // 2026-09-26). Used ONLY as the fallback when the WebView is blocked.
-  // Asks for the user's permission first: the Chrome tab opens right here
-  // inside the app, landing directly on IRCTC's train-search page, and
-  // nothing typed there is visible to Tatkal Copilot.
+  // Opens IRCTC in the REAL Chrome app (explicit com.android.chrome intent),
+  // not a Custom Tab and not the WebView. The fill + tap services gate on
+  // real-browser packages, so only the full Chrome app guarantees they
+  // engage. Asks for the user's permission first. Falls back to the default
+  // browser when Chrome isn't installed.
   const openInChrome = useCallback(() => {
     Alert.alert(
       'Open IRCTC in Chrome?',
-      'This opens IRCTC\u2019s train-search page in a secure Chrome tab right here in the app, using your Chrome login — IRCTC works normally there.\n\nTatkal Copilot cannot see anything you type in that tab. Your password stays between you and IRCTC.',
+      'This opens IRCTC\u2019s train-search page in your Chrome app, using your Chrome login — IRCTC works normally there.\n\nTatkal Copilot cannot see anything you type there. Your password stays between you and IRCTC.',
       [
         { text: 'Not now', style: 'cancel' },
         {
           text: 'Allow & continue',
           onPress: () =>
-            void WebBrowser.openBrowserAsync(IRCTC_TRAIN_SEARCH_URL).catch(() =>
-              Linking.openURL(IRCTC_TRAIN_SEARCH_URL),
-            ),
+            void (async () => {
+              const where = await openInChromeApp(IRCTC_TRAIN_SEARCH_URL);
+              if (!where) {
+                setPrebookNotice(
+                  'Could not open Chrome. Please open Chrome yourself and go to irctc.co.in.',
+                );
+              }
+            })(),
         },
       ],
     );
@@ -1342,7 +1346,13 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
           fullWidth
           onPress={() => {
             void (async () => {
-              await syncAutofillData(tripId);
+              const synced = await syncAutofillData(tripId);
+              if (!synced) {
+                setPrebookNotice(
+                  'Could not prepare your booking details (passengers or trip missing). Check your trip and passengers, then try again.',
+                );
+                return;
+              }
               openInChrome();
             })();
           }}
