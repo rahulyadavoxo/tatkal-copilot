@@ -30,6 +30,12 @@
  *   train list already showing skips tapSearch).
  */
 import { findSubmitPatterns } from './fillEngine';
+import {
+  AVAILABILITY_MARKERS,
+  KNOWN_CLASS_CODES,
+  POPUP_AFFIRM_TEXTS,
+  STATION_MISMATCH,
+} from './stageChoices';
 
 export interface PostSearchPlan {
   trainNo: string; // 5 digits, e.g. '12873'
@@ -113,6 +119,14 @@ export interface PostSearchBuildOptions {
 export function buildPostSearchScript(plan: PostSearchPlan, opts: PostSearchBuildOptions = {}): string {
   validatePostSearchPlan(plan);
   const planJson = JSON.stringify(plan);
+  // Shared choice data (src/core/stageChoices.ts) — the Chrome path reads the same values.
+  const sharedJson = JSON.stringify({
+    classes: KNOWN_CLASS_CODES,
+    availRe: AVAILABILITY_MARKERS.join('|'),
+    mismatchPrompt: STATION_MISMATCH.prompt,
+    mismatchMarkers: STATION_MISMATCH.markers,
+    affirm: POPUP_AFFIRM_TEXTS,
+  });
   const seed = typeof opts.seed === 'number' ? opts.seed : Math.floor(Math.random() * 1e9);
 
   // NOTE: plain ES5-ish JS for the WebView. No backticks or ${ inside —
@@ -120,6 +134,7 @@ export function buildPostSearchScript(plan: PostSearchPlan, opts: PostSearchBuil
   return `(function(){
 "use strict";
 var PLAN = ${planJson};
+var SHARED = ${sharedJson};
 var SEED = ${seed};
 var log = (window.__tatkalEventLog = window.__tatkalEventLog || []);
 function post(type, data){
@@ -346,7 +361,7 @@ function cardVerified(card, trainNo){
   try { t = card.innerText || ''; } catch (e) {}
   return t.indexOf(trainNo) !== -1 && bookNowCount(card) === 1;
 }
-var KNOWN_CLASSES = ['1A','2A','3A','SL','2S','CC','EC','FC','3E','EA','EV','VC','VS'];
+var KNOWN_CLASSES = SHARED.classes;
 function classTabs(card){
   var els = card.querySelectorAll('button, a, li, [role="tab"]');
   var tabs = [];
@@ -437,8 +452,9 @@ function dateSelectionStuck(card, dateCard){
 // card header's journey-date text — the old smallest-date-match tapped that
 // decoy (seen on-device 2026-10-07: header "Thu, 08 Oct" won over the
 // availability box), the tap did nothing, and Book Now stayed disabled.
+var AVAIL_RE = new RegExp(SHARED.availRe);
 function availMarker(t){
-  return /available|waiting|wl|rac|regret/.test(t);
+  return AVAIL_RE.test(t);
 }
 function findAvailabilityBox(card, dateCard){
   var els = card.querySelectorAll('button, div, li, span, a, [role="button"], [role="option"]');
@@ -580,11 +596,11 @@ function findPopup(){
 // "boarding station" wording.
 function isStationMismatch(txt){
   var t = norm(txt);
-  if (!/do you want to continue/i.test(t)) return false;
-  var hasStationCodes = /\\b[a-z]{2,5}\\b/.test(t) &&
-    /booking from|searched trains|boarding/.test(t);
-  var hasBoardingWord = /boarding/.test(t) && /station/.test(t);
-  return hasStationCodes || hasBoardingWord;
+  if (t.indexOf(SHARED.mismatchPrompt) < 0) return false;
+  for (var i = 0; i < SHARED.mismatchMarkers.length; i++) {
+    if (t.indexOf(SHARED.mismatchMarkers[i]) >= 0) return true;
+  }
+  return false;
 }
 async function stepPopup(){
   var popup = null;
@@ -615,7 +631,7 @@ function popupAffirm(popup){
     var raw = norm(btns[i].innerText || btns[i].textContent || '');
     if (raw.length > 8) continue;
     var t = raw.replace(/^[^a-z]+/, '');
-    if (t === 'yes' || t === 'ok') return btns[i];
+    if (SHARED.affirm.indexOf(t) >= 0) return btns[i];
   }
   return null;
 }

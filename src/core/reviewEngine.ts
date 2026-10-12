@@ -23,6 +23,7 @@
  *   source in CI (test-time check, not a runtime guard).
  */
 import { findSubmitPatterns } from './fillEngine';
+import { COBRAND_SECTION_MARKERS, paymentModeTokens } from './stageChoices';
 
 /** Payment-mode preference for the review page. (Canonical app-level type:
  *  vaultStore's PaymentMode — kept identical here so the engine compiles
@@ -82,12 +83,21 @@ export interface ReviewBuildOptions {
 
 export function buildReviewScript(plan: ReviewPlan, opts: ReviewBuildOptions = {}): string {
   const planJson = JSON.stringify(plan);
+  // Shared choice data (src/core/stageChoices.ts) — the Chrome path reads the same values.
+  const sharedJson = JSON.stringify({
+    cobrand: COBRAND_SECTION_MARKERS,
+    modeTokens: {
+      cards: paymentModeTokens('cards'),
+      bhim: paymentModeTokens('bhim'),
+    },
+  });
   const seed = typeof opts.seed === 'number' ? opts.seed : Math.floor(Math.random() * 1e9);
 
   // NOTE: plain ES5-ish JS for the WebView. No backticks or ${ inside.
   return `(function(){
 "use strict";
 var PLAN = ${planJson};
+var SHARED = ${sharedJson};
 var SEED = ${seed};
 var log = (window.__tatkalEventLog = window.__tatkalEventLog || []);
 function post(type, data){
@@ -216,8 +226,11 @@ async function stepSkipCard(){
     var own = norm(ownText(radios[i]));
     if (own.indexOf('skip') === -1) continue;
     var sec = norm(sectionText(radios[i]));
-    if (sec.indexOf('co-brand') !== -1 || sec.indexOf('loyalty') !== -1 || sec.indexOf('reward') !== -1 ||
-        sec.indexOf('pay less, earn more') !== -1 || sec.indexOf('sbi card') !== -1) { skip = radios[i]; break; }
+    var inCobrand = false;
+    for (var m = 0; m < SHARED.cobrand.length; m++) {
+      if (sec.indexOf(SHARED.cobrand[m]) !== -1) { inCobrand = true; break; }
+    }
+    if (inCobrand) { skip = radios[i]; break; }
     // A "Skip" radio outside the co-branded/loyalty section is NOT ours
     // (e.g. a meal or seat "Skip") — it must never be clicked; halt instead.
   }
@@ -289,9 +302,10 @@ function ownOptionText(el){
   return norm(parts.join(' | '));
 }
 function payMatches(t, want){
-  if (want === 'bhim') return /bhim/.test(t) && /upi/.test(t);
-  if (want === 'cards') return /credit/.test(t) && /debit/.test(t);
-  return false;
+  var toks = SHARED.modeTokens[want];
+  if (!toks || !toks.length) return false;
+  for (var i = 0; i < toks.length; i++) if (t.indexOf(toks[i]) === -1) return false;
+  return true;
 }
 function findPaymentRadio(want){
   // Native radios AND custom role="radio" controls. Two passes: first the

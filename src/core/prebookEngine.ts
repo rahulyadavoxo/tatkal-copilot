@@ -26,6 +26,7 @@
  *   CAPTCHA_REQUIRED / OTP_REQUIRED and the user takes over.
  */
 import { findSubmitPatterns } from './fillEngine';
+import { CLASS_VALUE_TEXTS, languageButtonText, QUOTA_VALUE_TEXTS } from './stageChoices';
 
 export interface PrebookStation {
   code: string; // e.g. 'BCT'
@@ -108,6 +109,12 @@ export interface PrebookBuildOptions {
 
 export function buildPrebookScript(plan: PrebookPlan, opts: PrebookBuildOptions = {}): string {
   const planJson = JSON.stringify(plan);
+  // Shared choice data (src/core/stageChoices.ts) — the Chrome path reads the same values.
+  const sharedJson = JSON.stringify({
+    lang: { en: languageButtonText('en'), hi: languageButtonText('hi') },
+    quotaValues: QUOTA_VALUE_TEXTS,
+    classValues: CLASS_VALUE_TEXTS,
+  });
   const seed = typeof opts.seed === 'number' ? opts.seed : Math.floor(Math.random() * 1e9);
 
   // NOTE: the template below is plain ES5-ish JS that runs inside the WebView.
@@ -122,6 +129,7 @@ export function buildPrebookScript(plan: PrebookPlan, opts: PrebookBuildOptions 
   return `(function(){
 "use strict";
 var PLAN = ${planJson};
+var SHARED = ${sharedJson};
 var SEED = ${seed};
 var log = (window.__tatkalEventLog = window.__tatkalEventLog || []);
 function post(type, data){
@@ -223,9 +231,9 @@ function visibleButtonExact(text){
   return null;
 }
 async function stepLanguage(){
-  var want = PLAN.language === 'hi' ? 'हिंदी' : 'English';
+  var want = PLAN.language === 'hi' ? SHARED.lang.hi : SHARED.lang.en;
   var btn = visibleButtonExact(want);
-  var other = visibleButtonExact(want === 'English' ? 'हिंदी' : 'English');
+  var other = visibleButtonExact(want === SHARED.lang.en ? SHARED.lang.hi : SHARED.lang.en);
   if (!btn && !other) return stepOk('language', { skipped: true });
   if (!btn) return stepMissing('language');
   clickEl(btn);
@@ -762,9 +770,8 @@ function findDropdown(res){
   }
   return labelHits.length ? labelHits[0] : null;
 }
-var QUOTA_VALUE_TEXTS = ['general', 'ladies', 'lower berth/sr.citizen',
-  'person with disability', 'duty pass', 'tatkal', 'premium tatkal'];
-var CLASS_VALUE_TEXTS = ['all classes'];
+var QUOTA_VALUE_TEXTS = SHARED.quotaValues;
+var CLASS_VALUE_TEXTS = SHARED.classValues;
 function findDropdownByValue(texts){
   // The live quota control (2026-09-29) carries no "quota" in its attributes
   // or nearby labels — find it by the value it currently displays instead.

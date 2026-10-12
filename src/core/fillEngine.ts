@@ -39,6 +39,12 @@
  *    CI/harness; it does not run inside the shipped app.
  *  - On an OTP screen the engine halts and emits OTP_REQUIRED.
  */
+import {
+  berthOptionText,
+  DEFAULT_MEAL as SHARED_DEFAULT_MEAL,
+  genderOptionText,
+  insuranceOptionText,
+} from './stageChoices';
 
 export interface PassengerInput {
   name: string;
@@ -67,7 +73,7 @@ export const MEAL_OPTIONS = [
 ] as const;
 
 /** Default meal when a saved passenger has no preference stored. */
-export const DEFAULT_MEAL = 'Veg';
+export const DEFAULT_MEAL = SHARED_DEFAULT_MEAL;
 
 export interface FillPlan {
   trainNo: string;
@@ -192,24 +198,9 @@ export function mulberry32(seed: number): () => number {
 // screenshots 2026-09-26). Matching is by visible text, never by value.
 // ---------------------------------------------------------------------------
 
-export function genderOptionText(gender: string): string[] {
-  const g = (gender || '').toUpperCase();
-  if (g === 'F') return ['Female'];
-  if (g === 'O') return ['Other', 'Transgender'];
-  return ['Male'];
-}
-
-export function berthOptionText(berthPref: string): string[] {
-  switch ((berthPref || '').toUpperCase()) {
-    case 'LB': return ['Lower'];
-    case 'MB': return ['Middle'];
-    case 'UB': return ['Upper'];
-    case 'SL': return ['Side Lower'];
-    case 'SU': return ['Side Upper'];
-    case 'WS': return ['Window Side'];
-    default: return ['No Preference'];
-  }
-}
+// Shared with the Chrome path (src/native/autofillData.ts) so the two
+// booking paths always pick the same option.
+export { genderOptionText, berthOptionText };
 
 // ---------------------------------------------------------------------------
 // Field plan -> ordered actions (passenger-details page only)
@@ -325,9 +316,7 @@ export function buildFieldActions(plan: FillPlan): FieldAction[] {
     kind: 'radio',
     value: plan.travelInsurance ? 'yes' : 'no',
     label: 'travel-insurance',
-    optionText: plan.travelInsurance
-      ? ['Yes, and I accept']
-      : ["No, I don't want"],
+    optionText: insuranceOptionText(plan.travelInsurance),
     optional: true,
     locator: { labelText: ['Travel Insurance'] },
   });

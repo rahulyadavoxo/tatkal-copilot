@@ -29,6 +29,7 @@
  *   asserts the gateway page is never scripted.
  */
 import { findSubmitPatterns } from './fillEngine';
+import { PAYMENT_METHOD_PATTERNS } from './stageChoices';
 
 /** Payment-method preference (IRCTC "Payment Methods" page). */
 export type PaymentMethodChoice = 'default' | 'ipay' | 'multiple' | 'bhimUssd';
@@ -103,6 +104,8 @@ export interface PaymentBuildOptions {
 export function buildPaymentScript(plan: PaymentPlan, opts: PaymentBuildOptions = {}): string {
   validatePaymentPlan(plan);
   const planJson = JSON.stringify(plan);
+  // Shared choice data (src/core/stageChoices.ts) — the Chrome path reads the same values.
+  const sharedJson = JSON.stringify({ methods: PAYMENT_METHOD_PATTERNS });
   const seed = typeof opts.seed === 'number' ? opts.seed : Math.floor(Math.random() * 1e9);
 
   // NOTE: plain ES5-ish JS for the WebView. No backticks or ${ inside — the
@@ -111,6 +114,7 @@ export function buildPaymentScript(plan: PaymentPlan, opts: PaymentBuildOptions 
   return `(function(){
 "use strict";
 var PLAN = ${planJson};
+var SHARED = ${sharedJson};
 var SEED = ${seed};
 var log = (window.__tatkalEventLog = window.__tatkalEventLog || []);
 function post(type, data){
@@ -325,10 +329,8 @@ async function stepReviewJourney(){
 // ---------- step 3+4+5: Payment Methods page ----------
 function methodRegex(){
   var m = PLAN.paymentMethod || 'default';
-  if (m === 'ipay') return /irctc\\s*ipay/;
-  if (m === 'multiple') return /multiple payment service/;
-  if (m === 'bhimUssd') return /bhim/;
-  return null;
+  var src = Object.prototype.hasOwnProperty.call(SHARED.methods, m) ? SHARED.methods[m] : null;
+  return src ? new RegExp(src) : null;
 }
 async function stepPayMethods(){
   // No time limit: wait as long as it takes for the Payment Methods page.
