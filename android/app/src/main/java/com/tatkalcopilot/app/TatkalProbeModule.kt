@@ -77,10 +77,12 @@ class TatkalProbeModule(private val reactContext: ReactApplicationContext) :
     }
 
     /**
-     * Opens a URL in the real Chrome app (not a Custom Tab, not the WebView).
-     * Tries installed Chrome variants first; falls back to the system's
-     * default browser. Returns the package that was actually opened
-     * ("chrome:<pkg>" / "browser:<pkg>") so the app can tell the user.
+     * Opens a URL in a real browser app (not a Custom Tab, not the WebView).
+     * Enumerates installed https-handlers via PackageManager (visible through
+     * the manifest <queries>), prefers a real Chrome build, then any known
+     * browser. Never fires a generic intent, so no app-chooser popup appears.
+     * Returns "chrome:<pkg>" / "browser:<pkg>"; rejects with NO_BROWSER when
+     * nothing suitable is installed.
      * The automation services gate on real-browser packages, so the full
      * browser app is the only target that guarantees both the fill service
      * and the tap service engage.
@@ -88,36 +90,56 @@ class TatkalProbeModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun openInChromeApp(url: String, promise: Promise) {
         try {
-            val pm = reactContext.packageManager
-            val uri = Uri.parse(url)
-            // Prefer a real Chrome build when one is installed.
-            val chromePkg = CHROME_PACKAGES.firstOrNull { pkg ->
-                try {
-                    pm.getPackageInfo(pkg, 0); true
-                } catch (_: Exception) { false }
-            }
-            if (chromePkg != null) {
-                val chromeIntent = Intent(Intent.ACTION_VIEW, uri).apply {
-                    setPackage(chromePkg)
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                reactContext.startActivity(chromeIntent)
-                promise.resolve("chrome:$chromePkg")
+            val targetPkg = findBrowserPackage()
+            if (targetPkg == null) {
+                promise.reject("NO_BROWSER", "No supported browser installed")
                 return
             }
-            // No Chrome installed: use the system default browser explicitly
-            // so no app-chooser popup appears.
-            val probe = Intent(Intent.ACTION_VIEW, uri)
-            val defaultPkg = pm.resolveActivity(probe, 0)?.activityInfo?.packageName
-            val fallback = Intent(Intent.ACTION_VIEW, uri).apply {
-                if (defaultPkg != null) setPackage(defaultPkg)
+            val explicit = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                setPackage(targetPkg)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            reactContext.startActivity(fallback)
-            promise.resolve("browser:${defaultPkg ?: "unknown"}")
+            reactContext.startActivity(explicit)
+            val kind = if (CHROME_PACKAGES.contains(targetPkg)) "chrome" else "browser"
+            promise.resolve("$kind:$targetPkg")
         } catch (e: Exception) {
             promise.reject("ERR", e)
         }
+    }
+
+    /** Probe helper: which https-handlers the app can see (for diagnostics). */
+    @ReactMethod
+    fun getBrowserInfo(promise: Promise) {
+        try {
+            val pm = reactContext.packageManager
+            val viewIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.irctc.co.in")).apply {
+                addCategory(Intent.CATEGORY_BROWSABLE)
+            }
+            val handlers = pm.queryIntentActivities(viewIntent, 0)
+                .map { it.activityInfo.packageName }
+                .distinct()
+                .sorted()
+            val o = JSONObject()
+            o.put("handlers", JSONArray(handlers))
+            o.put("picked", findBrowserPackage() ?: JSONObject.NULL)
+            promise.resolve(o.toString())
+        } catch (e: Exception) {
+            promise.reject("ERR", e)
+        }
+    }
+
+    private fun findBrowserPackage(): String? {
+        val pm = reactContext.packageManager
+        val viewIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.irctc.co.in")).apply {
+            addCategory(Intent.CATEGORY_BROWSABLE)
+        }
+        val handlers = try {
+            pm.queryIntentActivities(viewIntent, 0)
+                .map { it.activityInfo.packageName }
+                .distinct()
+        } catch (_: Exception) { emptyList() }
+        return CHROME_PACKAGES.firstOrNull { it in handlers }
+            ?: KNOWN_BROWSERS.firstOrNull { it in handlers }
     }
 
     companion object {
@@ -126,6 +148,27 @@ class TatkalProbeModule(private val reactContext: ReactApplicationContext) :
             "com.chrome.beta",
             "com.chrome.dev",
             "com.chrome.canary"
+        )
+        private val KNOWN_BROWSERS = listOf(
+            "com.android.chrome",
+            "com.chrome.beta",
+            "com.chrome.dev",
+            "com.chrome.canary",
+            "org.mozilla.firefox",
+            "org.mozilla.firefox_beta",
+            "org.mozilla.fenix",
+            "com.brave.browser",
+            "com.mi.globalbrowser",
+            "com.sec.android.app.sbrowser",
+            "com.opera.browser",
+            "com.opera.mini.native",
+            "com.ucmobile.intl",
+            "com.microsoft.emmx",
+            "com.duckduckgo.mobile.android",
+            "com.vivaldi.browser",
+            "app.vanadium",
+            "com.realme.browser",
+            "com.coloros.browser"
         )
     }
 

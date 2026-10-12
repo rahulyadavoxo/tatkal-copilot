@@ -21,6 +21,7 @@ import type { Nav } from '../App';
 import { useTheme } from '../theme';
 import {
   clearProbeData,
+  getBrowserInfo,
   getProbeReport,
   isAutofillServiceEnabled,
   isProbeAvailable,
@@ -62,6 +63,18 @@ function summarizeDump(raw: string, kind: 'fields' | 'nodes'): string {
   }
 }
 
+function formatBrowserInfo(raw: string | null): string {
+  if (!raw) return 'No data yet.';
+  try {
+    const d = JSON.parse(raw) as { handlers?: string[]; picked?: string | null };
+    const lines = [`Would open: ${d.picked ?? '(none found)'}`];
+    for (const h of d.handlers ?? []) lines.push(`- ${h}`);
+    return lines.join('\n');
+  } catch {
+    return 'Could not parse.';
+  }
+}
+
 export default function ProbeScreen({ nav }: { nav: Nav }) {
   const { theme } = useTheme();
   const [autofillOn, setAutofillOn] = useState(false);
@@ -69,19 +82,22 @@ export default function ProbeScreen({ nav }: { nav: Nav }) {
   const [report, setReport] = useState<ProbeReport | null>(null);
   const [tapTarget, setTapTarget] = useState('Search Trains');
   const [busy, setBusy] = useState(false);
+  const [browserInfo, setBrowserInfo] = useState<string | null>(null);
   const available = isProbeAvailable();
 
   const refresh = useCallback(async () => {
     setBusy(true);
     try {
-      const [a, t, r] = await Promise.all([
+      const [a, t, r, b] = await Promise.all([
         isAutofillServiceEnabled(),
         isTapServiceEnabled(),
         getProbeReport(),
+        getBrowserInfo(),
       ]);
       setAutofillOn(a);
       setTapOn(t);
       setReport(r);
+      setBrowserInfo(b);
     } finally {
       setBusy(false);
     }
@@ -191,6 +207,9 @@ export default function ProbeScreen({ nav }: { nav: Nav }) {
           <Text style={styles.btnText}>Refresh report</Text>
         )}
       </TouchableOpacity>
+
+      <Text style={[styles.label, { marginTop: 12 }]}>Browser detection</Text>
+      <Text style={styles.mono}>{formatBrowserInfo(browserInfo)}</Text>
 
       <Text style={[styles.label, { marginTop: 12 }]}>Autofill: fields seen in Chrome</Text>
       {report?.fillStatus ? (

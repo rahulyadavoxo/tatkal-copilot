@@ -14,6 +14,7 @@ interface ProbeNativeModule {
   clearProbeData(): Promise<boolean>;
   writeAutofillData(fieldMap: string, choreoMap: string, fillData: string): Promise<boolean>;
   openInChromeApp(url: string): Promise<string>;
+  getBrowserInfo(): Promise<string>;
 }
 
 const M = NativeModules.TatkalProbe as ProbeNativeModule | undefined;
@@ -101,13 +102,21 @@ export async function writeAutofillData(
 }
 
 /**
- * Opens a URL in the real Chrome app via the native module (explicit
- * com.android.chrome intent). Returns 'chrome', 'fallback' (default
- * browser), or null when the native bridge is unavailable.
+ * Opens a URL in a real browser app via the native module. Returns
+ * 'chrome:<pkg>' / 'browser:<pkg>', or null when unavailable / no browser.
  */
 export async function openInChromeApp(url: string): Promise<string | null> {
   try {
     return (await M?.openInChromeApp(url)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Diagnostic: which https-handlers the app can see, and which it would pick. */
+export async function getBrowserInfo(): Promise<string | null> {
+  try {
+    return (await M?.getBrowserInfo()) ?? null;
   } catch {
     return null;
   }
