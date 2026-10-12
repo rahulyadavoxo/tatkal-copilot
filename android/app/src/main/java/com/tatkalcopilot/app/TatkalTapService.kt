@@ -402,9 +402,9 @@ class TatkalTapService : AccessibilityService() {
                 if (paymentLockdown) return
 
                 val root = try { rootInActiveWindow } catch (_: Exception) { null }
-                if (root == null) { Thread.sleep(500); continue }
+                if (root == null) { Thread.sleep(250); continue }
                 val pkg = try { root.packageName?.toString() } catch (_: Exception) { null }
-                if (pkg == "com.android.systemui") { Thread.sleep(500); continue }
+                if (pkg == "com.android.systemui") { Thread.sleep(250); continue }
                 if (pkg == null || !BROWSER_PACKAGES.contains(pkg)) return // resumes on return
 
                 snap = snapshotWindows(root)
@@ -436,7 +436,7 @@ class TatkalTapService : AccessibilityService() {
                         if (slow) "IRCTC is slow, still waiting… (${lastEngineStatus.substringBefore(" —")})"
                         else "${lastEngineStatus.substringBefore(" —")} — IRCTC is loading"
                     )
-                    Thread.sleep(400)
+                    Thread.sleep(200)
                     continue
                 }
                 loaderSince = 0L
@@ -471,9 +471,9 @@ class TatkalTapService : AccessibilityService() {
                 if (acted || waiting) lastProgress = System.currentTimeMillis()
                 if (!pageFound) {
                     engineStatus("${lastEngineStatus.substringBefore(" —")} — waiting for the next IRCTC page")
-                    Thread.sleep(600)
+                    Thread.sleep(250)
                 } else if (!acted) {
-                    Thread.sleep(350)
+                    Thread.sleep(120)
                 }
             }
         } finally {
@@ -529,7 +529,7 @@ class TatkalTapService : AccessibilityService() {
                         return r
                     }
                     engineStatus(stageStatus(stage, say))
-                    val settle = step.optLong("settleMs", 500L).coerceIn(300L, 1_500L)
+                    val settle = step.optLong("settleMs", 200L).coerceIn(120L, 600L)
                     try { Thread.sleep(settle) } catch (_: Exception) { }
                     return r
                 }
@@ -597,7 +597,16 @@ class TatkalTapService : AccessibilityService() {
         if (labels.isEmpty()) return Res.DONE
 
         if (step.optBoolean("repeatWhilePage", false)) {
-            val n = findTapTarget(labels, step) ?: return Res.MISSING
+            // Language alert: the page header has its own "English" toggle, so
+            // take matches nearest the alert's sentence, and rotate to the next
+            // match on each retry if the alert is still up.
+            val wants = labels.map { it.trim().lowercase() }
+            val anchor = snap.firstOrNull { it.lower.contains("preferred language") }
+            val cands = snap.filter { c -> !c.editable && wants.any { c.lower == it } && c.bounds.width() > 0 }
+                .sortedBy { c -> if (anchor == null) 0 else Math.abs(c.bounds.centerY() - anchor.bounds.centerY()) }
+            val rec = taps.getOrPut(key) { TapRec(0, 0L) }
+            val n = if (cands.isNotEmpty()) cands[rec.count % cands.size] else findTapTarget(labels, step) ?: return Res.MISSING
+            rec.count += 1; rec.lastTs = System.currentTimeMillis()
             return if (tapNode(n)) { sleep(800); Res.ACTED } else Res.MISSING
         }
 
@@ -1250,6 +1259,10 @@ class TatkalTapService : AccessibilityService() {
         if (stepFlags["payment:reached"] == 1 && host != null && allow.none { host == it || host.endsWith(".$it") }) {
             return "Left IRCTC for $host — you're at the payment step. Pay by hand."
         }
+        // Gateway text counts only from the review/payment pages on: IRCTC's
+        // home page itself shows e.g. "Scan QR" (app download), which killed
+        // runs before the language alert.
+        if (stepFlags["payment:reached"] != 1) return null
         val texts = jsonStrList(gateway?.optJSONArray("anyContains")).map { it.lowercase() }
         val hit = texts.firstOrNull { screenText.contains(it) }
         if (hit != null) return "Payment page detected — pay by hand."
@@ -1488,7 +1501,9 @@ class TatkalTapService : AccessibilityService() {
     }
 
     private fun sleep(ms: Long) {
-        try { Thread.sleep(ms) } catch (_: Exception) { }
+        // Speed pass 2026-10-12: fixed waits cut to 40%, the page check after
+        // each action confirms the result instead.
+        try { Thread.sleep(maxOf(80L, ms * 2 / 5)) } catch (_: Exception) { }
     }
 
     // ------------------------------------------------------------------
