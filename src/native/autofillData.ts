@@ -76,7 +76,11 @@ export const DEFAULT_CHOREO_MAP = {
       // preferred language"). Handle it before anything else so it never
       // blocks the search page. Checked first: first-match wins.
       id: 'language',
-      detect: { allContains: ['preferred language'] },
+      // Either the prompt's sentence or both language buttons side by side.
+      detect: {
+        allContains: ['preferred language'],
+        anyOf: [['preferred language'], ['english', 'हिंदी']],
+      },
       steps: [{ do: 'tap', text: 'English' }],
     },
     {
