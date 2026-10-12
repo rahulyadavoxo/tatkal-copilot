@@ -220,7 +220,7 @@ describe('choreography map', () => {
 
   it('login never solves the captcha: focus, then the in-app submit rule', () => {
     const s = page('login').steps.map((x) => x.do);
-    expect(s).toEqual(['fillField', 'fillField', 'focusCaptcha', 'submitLogin']);
+    expect(s).toEqual(['fillField', 'fillField', 'submitLogin']);
   });
 
   it('auto-upgradation only when the trip asks; payment mode only when not default', () => {

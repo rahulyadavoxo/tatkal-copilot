@@ -205,8 +205,7 @@ export const DEFAULT_CHOREO_MAP = {
       steps: [
         { do: 'fillField', labelContains: ['user name', 'username', 'login id'], loginUser: true, valueKey: 'irctc.username', say: 'filling your user name' },
         { do: 'fillField', labelContains: ['password'], passwordField: true, valueKey: 'irctc.password', say: 'filling your password' },
-        { do: 'focusCaptcha', say: 'type the captcha' },
-        { do: 'submitLogin', text: 'SIGN IN', say: 'type the captcha, then tap SIGN IN' },
+        { do: 'submitLogin', text: 'SIGN IN', say: 'tapping SIGN IN' },
       ],
     },
     {

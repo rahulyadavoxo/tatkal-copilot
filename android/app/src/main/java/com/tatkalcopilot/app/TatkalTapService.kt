@@ -1155,10 +1155,14 @@ class TatkalTapService : AccessibilityService() {
     }
 
     private fun loginCaptchaField(): S? {
-        val eds = snap.filter { it.editable }
-        val pw = eds.indexOfFirst { it.node.isPassword }
-        if (pw < 0) return null
-        return eds.getOrNull(pw + 1) ?: eds.firstOrNull { it.hint.contains("captcha") }
+        // Only a real, visible captcha box counts. "Any field after the
+        // password" matched the search form behind the login sheet and
+        // blocked SIGN IN even though IRCTC showed no captcha (2026-10-12).
+        return snap.firstOrNull { s ->
+            s.editable && !s.node.isPassword && s.bounds.width() > 0 && s.bounds.height() > 0 &&
+                (s.hint.contains("captcha") || s.lower.contains("captcha")) &&
+                (try { s.node.isVisibleToUser } catch (_: Exception) { false })
+        }
     }
 
     /**
@@ -1167,7 +1171,7 @@ class TatkalTapService : AccessibilityService() {
      * SIGN IN once.
      */
     private fun stepSubmitLogin(key: String, step: JSONObject, stage: Int, say: String): Res {
-        val captcha = screenText.contains("captcha") || loginCaptchaField() != null
+        val captcha = loginCaptchaField()?.let { it.text.isEmpty() || it.lower.contains("captcha") } ?: false
         if (captcha) {
             engineStatus(stageStatus(stage, say))
             return Res.WAIT
