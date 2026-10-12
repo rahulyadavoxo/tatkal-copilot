@@ -327,7 +327,10 @@ class TatkalTapService : AccessibilityService() {
                     Thread {
                         try {
                             runChoreographyFast()
-                        } catch (_: Exception) {
+                        } catch (e: Throwable) {
+                            // Never fail silently: the Automation probe screen shows this.
+                            val at = e.stackTrace.firstOrNull { it.className.contains("tatkal") }
+                            engineStatus("CRASH ${e.javaClass.simpleName}: ${(e.message ?: "").take(90)} @${at?.methodName}:${at?.lineNumber}")
                         } finally {
                             hideStopNotification()
                             synchronized(this) { choreographyRunning = false }
@@ -605,9 +608,15 @@ class TatkalTapService : AccessibilityService() {
             val cands = snap.filter { c -> !c.editable && wants.any { c.lower == it } && c.bounds.width() > 0 }
                 .sortedBy { c -> if (anchor == null) 0 else Math.abs(c.bounds.centerY() - anchor.bounds.centerY()) }
             val rec = taps.getOrPut(key) { TapRec(0, 0L) }
-            val n = if (cands.isNotEmpty()) cands[rec.count % cands.size] else findTapTarget(labels, step) ?: return Res.MISSING
+            val n = if (cands.isNotEmpty()) cands[rec.count % cands.size] else findTapTarget(labels, step)
+            if (n == null) {
+                engineStatus(stageStatus(stage, say, " — '${wants.firstOrNull()}' not found (${snap.size} nodes)"))
+                return Res.MISSING
+            }
             rec.count += 1; rec.lastTs = System.currentTimeMillis()
-            return if (tapNode(n)) { sleep(800); Res.ACTED } else Res.MISSING
+            val ok = tapNode(n)
+            engineStatus(stageStatus(stage, say, " — tap ${rec.count} on '${n.lower.take(20)}' (${cands.size} matches) ${if (ok) "sent" else "FAILED"}"))
+            return if (ok) { sleep(800); Res.ACTED } else Res.MISSING
         }
 
         val doneWhen = step.optJSONObject("doneWhen")
