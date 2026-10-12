@@ -76,13 +76,14 @@ export const DEFAULT_CHOREO_MAP = {
       // preferred language"). Handle it before anything else so it never
       // blocks the search page. Checked first: first-match wins.
       id: 'language',
-      // Either the prompt's sentence or both language buttons side by side.
-      detect: {
-        allContains: ['preferred language'],
-        anyOf: [['preferred language'], ['english', 'हिंदी']],
-      },
+      // The alert always shows "Please select your preferred language."
+      // (device screenshot 2026-10-12). Only that sentence, so the main
+      // page's language toggle can never re-trigger this page.
+      detect: { allContains: ['preferred language'] },
       // textKey: the language saved in the app (English / हिंदी).
-      steps: [{ do: 'tap', textKey: 'site.language', text: 'English' }],
+      // gesture: a real finger tap (Chrome can ignore synthetic clicks);
+      // repeatWhilePage: tap again until the alert is gone.
+      steps: [{ do: 'tap', textKey: 'site.language', text: 'English', gesture: true, repeatWhilePage: true }],
     },
     {
       // IRCTC login form: fill the saved credentials (user decision
