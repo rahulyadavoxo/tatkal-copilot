@@ -128,9 +128,9 @@ class TatkalProbeModule(private val reactContext: ReactApplicationContext) :
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                 .build()
             val secure = EncryptedSharedPreferences.create(
+                reactContext,
                 TatkalAutofillService.PREFS_SECURE,
                 masterKey,
-                reactContext,
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )

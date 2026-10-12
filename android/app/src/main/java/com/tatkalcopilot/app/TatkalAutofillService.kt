@@ -55,9 +55,9 @@ class TatkalAutofillService : AutofillService() {
             .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
             .build()
         return EncryptedSharedPreferences.create(
+            this,
             PREFS_SECURE,
             masterKey,
-            this,
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
         )
