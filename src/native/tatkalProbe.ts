@@ -124,12 +124,12 @@ export async function getBrowserInfo(): Promise<string | null> {
   }
 }
 
-/** Master kill-switch for the tap automation. Defaults to ON. */
+/** Master kill-switch for the tap automation. Defaults to OFF (tile / Open in Chrome turn it ON). */
 export async function isAutomationEnabled(): Promise<boolean> {
   try {
-    return (await M?.isAutomationEnabled()) ?? true;
+    return (await M?.isAutomationEnabled()) ?? false;
   } catch {
-    return true;
+    return false;
   }
 }
 
