@@ -218,7 +218,7 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
   const [fillState, setFillState] = useState<FillState>('idle');
   // Master kill-switch for the tap automation. When OFF, the tap service
   // never starts and a running automation halts immediately.
-  const [automationOn, setAutomationOn] = useState(true);
+  const [automationOn, setAutomationOn] = useState(false);
   const [events, setEvents] = useState<Array<FillEvent | PrebookEvent>>([]);
   const [otpRequired, setOtpRequired] = useState(false);
   const [otpDigits, setOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
@@ -1387,10 +1387,10 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
           onPress={() => {
             void (async () => {
               if (!automationOn) {
-                setPrebookNotice(
-                  'Auto-booking is turned OFF. Turn it ON above to use auto mode.',
-                );
-                return;
+                // Tapping this button IS the go-ahead: switch auto-booking
+                // ON (same master switch as the Quick Settings tile).
+                await setAutomationEnabled(true);
+                setAutomationOn(true);
               }
               const synced = await syncAutofillData(tripId);
               if (!synced) {
