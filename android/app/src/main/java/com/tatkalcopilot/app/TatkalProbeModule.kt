@@ -78,31 +78,55 @@ class TatkalProbeModule(private val reactContext: ReactApplicationContext) :
 
     /**
      * Opens a URL in the real Chrome app (not a Custom Tab, not the WebView).
+     * Tries installed Chrome variants first; falls back to the system's
+     * default browser. Returns the package that was actually opened
+     * ("chrome:<pkg>" / "browser:<pkg>") so the app can tell the user.
      * The automation services gate on real-browser packages, so the full
-     * Chrome app is the only target that guarantees both the fill service
-     * and the tap service engage. Falls back to the default browser when
-     * Chrome isn't installed.
+     * browser app is the only target that guarantees both the fill service
+     * and the tap service engage.
      */
     @ReactMethod
     fun openInChromeApp(url: String, promise: Promise) {
         try {
-            val chromeIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-                setPackage("com.android.chrome")
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            val pm = reactContext.packageManager
+            val uri = Uri.parse(url)
+            // Prefer a real Chrome build when one is installed.
+            val chromePkg = CHROME_PACKAGES.firstOrNull { pkg ->
+                try {
+                    pm.getPackageInfo(pkg, 0); true
+                } catch (_: Exception) { false }
             }
-            try {
-                reactContext.startActivity(chromeIntent)
-                promise.resolve("chrome")
-            } catch (_: Exception) {
-                val fallback = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+            if (chromePkg != null) {
+                val chromeIntent = Intent(Intent.ACTION_VIEW, uri).apply {
+                    setPackage(chromePkg)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                reactContext.startActivity(fallback)
-                promise.resolve("fallback")
+                reactContext.startActivity(chromeIntent)
+                promise.resolve("chrome:$chromePkg")
+                return
             }
+            // No Chrome installed: use the system default browser explicitly
+            // so no app-chooser popup appears.
+            val probe = Intent(Intent.ACTION_VIEW, uri)
+            val defaultPkg = pm.resolveActivity(probe, 0)?.activityInfo?.packageName
+            val fallback = Intent(Intent.ACTION_VIEW, uri).apply {
+                if (defaultPkg != null) setPackage(defaultPkg)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            reactContext.startActivity(fallback)
+            promise.resolve("browser:${defaultPkg ?: "unknown"}")
         } catch (e: Exception) {
             promise.reject("ERR", e)
         }
+    }
+
+    companion object {
+        private val CHROME_PACKAGES = listOf(
+            "com.android.chrome",
+            "com.chrome.beta",
+            "com.chrome.dev",
+            "com.chrome.canary"
+        )
     }
 
     @ReactMethod

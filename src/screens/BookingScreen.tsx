@@ -784,7 +784,13 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
               const where = await openInChromeApp(IRCTC_TRAIN_SEARCH_URL);
               if (!where) {
                 setPrebookNotice(
-                  'Could not open Chrome. Please open Chrome yourself and go to irctc.co.in.',
+                  'Could not open a browser. Please open Chrome yourself and go to irctc.co.in.',
+                );
+              } else if (where.startsWith('browser:')) {
+                // No Chrome installed: automation still runs in the default
+                // browser, but IRCTC works best in Chrome.
+                setPrebookNotice(
+                  'Opened in your default browser instead of Chrome. For the smoothest booking, install Chrome from the Play Store.',
                 );
               }
             })(),

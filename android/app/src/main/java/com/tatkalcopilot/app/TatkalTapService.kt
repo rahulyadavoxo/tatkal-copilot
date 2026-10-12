@@ -42,11 +42,28 @@ class TatkalTapService : AccessibilityService() {
         const val CHROME_PKG = "com.android.chrome"
 
         private val BROWSER_PACKAGES = setOf(
+            // Chrome variants
             "com.android.chrome",
             "com.chrome.beta",
             "com.chrome.dev",
+            "com.chrome.canary",
+            // Firefox variants
             "org.mozilla.firefox",
-            "com.brave.browser"
+            "org.mozilla.firefox_beta",
+            "org.mozilla.fenix",
+            // Other common Android browsers
+            "com.brave.browser",
+            "com.mi.globalbrowser",
+            "com.sec.android.app.sbrowser",
+            "com.opera.browser",
+            "com.opera.mini.native",
+            "com.ucmobile.intl",
+            "com.microsoft.emmx",
+            "com.duckduckgo.mobile.android",
+            "com.vivaldi.browser",
+            "app.vanadium",
+            "com.realme.browser",
+            "com.coloros.browser"
         )
     }
 
