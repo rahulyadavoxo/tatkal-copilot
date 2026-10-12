@@ -1,9 +1,10 @@
 /**
- * IrctcAccountScreen — optional, on-device IRCTC user name storage.
+ * IrctcAccountScreen — optional, on-device IRCTC login storage.
  *
- * The app NEVER stores an IRCTC password — the user always types it by hand
- * on IRCTC's own login page. Only the user name is kept, encrypted in the
- * AES-256-GCM vault; it never leaves the device.
+ * The user types their IRCTC user name AND password here; both are kept
+ * encrypted in the AES-256-GCM vault and never leave the device. They are
+ * filled into IRCTC's official login page only, never logged, never sent
+ * anywhere else, and the assistant never sees them.
  *
  * Also holds the site-language preference (English / हिंदी) the automation
  * uses on IRCTC's welcome screen.
@@ -37,6 +38,7 @@ export default function IrctcAccountScreen({ nav }: { nav: Nav }) {
   const { theme } = useTheme();
   const t = theme.typography;
   const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [language, setLanguage] = useState<AppLanguage>('en');
   const [hasSaved, setHasSaved] = useState(false);
   const [message, setMessage] = useState('');
@@ -46,6 +48,7 @@ export default function IrctcAccountScreen({ nav }: { nav: Nav }) {
     const creds = await loadIrctcCredentials();
     setHasSaved(!!creds);
     setUsername(creds ? creds.username : '');
+    setPassword('');
     const prefs = await loadPrefs();
     setLanguage(prefs.language);
   });
@@ -61,14 +64,17 @@ export default function IrctcAccountScreen({ nav }: { nav: Nav }) {
       say('Type your IRCTC user name first.', 'error');
       return;
     }
+    if (!password) {
+      say('Type your IRCTC password too.', 'error');
+      return;
+    }
     try {
-      // Username only — the vault shape keeps the password slot empty;
-      // Tatkal Copilot never stores an IRCTC password.
-      await saveIrctcCredentials({ username: u, password: '' });
+      await saveIrctcCredentials({ username: u, password });
       await savePrefs({ language });
+      setPassword('');
       setHasSaved(true);
       say(
-        'Saved — encrypted on this phone. The app will fill it on IRCTC’s login page only.',
+        'Saved — encrypted on this phone. The app will fill both on IRCTC’s login page only.',
         'info',
       );
     } catch (e) {
@@ -83,6 +89,7 @@ export default function IrctcAccountScreen({ nav }: { nav: Nav }) {
     try {
       await clearIrctcCredentials();
       setUsername('');
+      setPassword('');
       setHasSaved(false);
       say('Saved login removed from this phone.', 'info');
     } catch (e) {
@@ -95,12 +102,12 @@ export default function IrctcAccountScreen({ nav }: { nav: Nav }) {
 
   return (
     <Screen>
-      <AppHeader title="IRCTC account" subtitle="Optional — we fill your user ID for you" onBack={nav.back} />
+      <AppHeader title="IRCTC account" subtitle="Optional — we fill your login for you" onBack={nav.back} />
       <SecureVaultCard />
 
       {hasSaved ? (
         <View style={{ marginTop: theme.spacing.md }}>
-          <Badge variant="success" icon="check" label="Username saved securely" />
+          <Badge variant="success" icon="check" label="Login saved securely" />
         </View>
       ) : null}
 
@@ -116,12 +123,14 @@ export default function IrctcAccountScreen({ nav }: { nav: Nav }) {
       </View>
 
       <View style={{ marginTop: theme.spacing.md }}>
-        <ListRow
-          icon="lock"
-          title="Password"
-          subtitle="Never stored by Tatkal Copilot — you type it by hand on IRCTC’s page"
-          showChevron={false}
-          accessibilityLabel="Password: never stored by Tatkal Copilot"
+        <LabeledInput
+          label="IRCTC password"
+          placeholder="Your IRCTC password"
+          value={password}
+          onChangeText={setPassword}
+          secureTextEntry
+          autoCapitalize="none"
+          autoCorrect={false}
         />
       </View>
 
@@ -133,7 +142,8 @@ export default function IrctcAccountScreen({ nav }: { nav: Nav }) {
           marginTop: theme.spacing.md,
         }}
       >
-        If IRCTC shows a CAPTCHA at login, you still solve that by hand.
+        Saved encrypted on this phone only. The app fills both on IRCTC’s login
+        page and nowhere else. If IRCTC shows a CAPTCHA, you still solve that by hand.
       </Text>
 
       <View style={{ marginTop: theme.spacing.md }}>
@@ -162,8 +172,8 @@ export default function IrctcAccountScreen({ nav }: { nav: Nav }) {
 
       <View style={{ marginTop: theme.spacing.md }}>
         <PrimaryButton
-          title="Save user name"
-          accessibilityLabel="Save IRCTC user name"
+          title="Save login"
+          accessibilityLabel="Save IRCTC login"
           onPress={() => void save()}
           icon="check"
         />

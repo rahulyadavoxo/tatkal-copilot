@@ -80,11 +80,15 @@ export const DEFAULT_CHOREO_MAP = {
       steps: [{ do: 'tap', text: 'English' }],
     },
     {
-      // Safety: if IRCTC's login form is visible, do nothing. Credentials
-      // are only ever typed by the user; the engine must never fill these.
+      // IRCTC login form: fill the saved credentials (user decision
+      // 2026-10-12). Filled on IRCTC's official login page only. Does NOT
+      // tap login/submit — the user solves the CAPTCHA and taps by hand.
       id: 'login',
       detect: { allContains: ['user name', 'password'] },
-      steps: [],
+      steps: [
+        { do: 'fillField', labelContains: ['user name'], valueKey: 'irctc.username' },
+        { do: 'fillField', labelContains: ['password'], valueKey: 'irctc.password' },
+      ],
     },
     {
       id: 'search',
@@ -135,7 +139,11 @@ function toDDMMYYYY(yyyyMmDd: string): string {
   return y && m && d ? `${d}/${m}/${y}` : yyyyMmDd;
 }
 
-export function buildFillData(trip: Trip, passengers: Passenger[]): Record<string, string> {
+export function buildFillData(
+  trip: Trip,
+  passengers: Passenger[],
+  creds?: { username: string; password: string } | null,
+): Record<string, string> {
   const data: Record<string, string> = {
     'trip.fromName': stationName(trip.from),
     'trip.fromCode': trip.from,
@@ -147,6 +155,8 @@ export function buildFillData(trip: Trip, passengers: Passenger[]): Record<strin
     'trip.trainNo': trip.trainNo,
     'trip.mobile': trip.contactMobile,
   };
+  if (creds?.username) data['irctc.username'] = creds.username;
+  if (creds?.password) data['irctc.password'] = creds.password;
   const tripPassengers = trip.passengerIds
     .map((id) => passengers.find((p) => p.id === id))
     .filter((p): p is Passenger => !!p)

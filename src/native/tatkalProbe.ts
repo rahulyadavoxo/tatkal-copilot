@@ -148,16 +148,20 @@ export async function setAutomationEnabled(on: boolean): Promise<void> {
 export async function syncAutofillData(tripId: string): Promise<boolean> {
   try {
     if (Platform.OS !== 'android' || !M?.writeAutofillData) return false;
-    const { loadPassengers, loadTrips } = await import('../vaultStore');
+    const { loadPassengers, loadTrips, loadIrctcCredentials } = await import('../vaultStore');
     const { buildFillData, DEFAULT_CHOREO_MAP, DEFAULT_FIELD_MAP } =
       await import('./autofillData');
-    const [trips, passengers] = await Promise.all([loadTrips(), loadPassengers()]);
+    const [trips, passengers, creds] = await Promise.all([
+      loadTrips(),
+      loadPassengers(),
+      loadIrctcCredentials(),
+    ]);
     const trip = trips.find((t) => t.id === tripId);
     if (!trip) return false;
     return await writeAutofillData(
       JSON.stringify(DEFAULT_FIELD_MAP),
       JSON.stringify(DEFAULT_CHOREO_MAP),
-      JSON.stringify(buildFillData(trip, passengers)),
+      JSON.stringify(buildFillData(trip, passengers, creds)),
     );
   } catch {
     return false;

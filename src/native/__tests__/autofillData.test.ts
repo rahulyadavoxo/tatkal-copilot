@@ -74,7 +74,7 @@ describe('default maps', () => {
   });
 
   it('every choreography valueKey exists in the fill data or is a literal', () => {
-    const d = buildFillData(trip, passengers);
+    const d = buildFillData(trip, passengers, { username: 'u', password: 'p' });
     for (const page of DEFAULT_CHOREO_MAP.pages) {
       for (const step of page.steps) {
         const key = (step as { valueKey?: string }).valueKey;

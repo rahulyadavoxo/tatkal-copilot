@@ -244,8 +244,12 @@ class TatkalProbeModule(private val reactContext: ReactApplicationContext) :
      * Writes the OTA-updatable automation data (field map, choreography map,
      * fill values) to encrypted prefs for the native services. Called by the
      * JS layer whenever trip/passenger data changes and on every app start.
-     * Never accepts credential keys — they are stripped here as well as in
-     * the services themselves (defense in depth).
+     *
+     * User decision 2026-10-12: the user explicitly asked for in-app IRCTC
+     * login storage. The irctc.username / irctc.password keys ARE accepted
+     * here (they come from the encrypted vault, filled on IRCTC's login page
+     * only). The legacy credentials.* keys remain stripped as defense in
+     * depth. Credential values are never logged anywhere.
      */
     @ReactMethod
     fun writeAutofillData(fieldMap: String, choreoMap: String, fillData: String, promise: Promise) {
