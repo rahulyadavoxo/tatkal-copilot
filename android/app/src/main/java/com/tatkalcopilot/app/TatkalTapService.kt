@@ -57,6 +57,9 @@ class TatkalTapService : AccessibilityService() {
         // Heartbeat (epoch ms) written by the running loop; the tile treats
         // a run as live only while this is fresh.
         const val KEY_SESSION_TS = "session_ts"
+        // Written by the tile when a new run starts; the engine clears its
+        // per-run memory (done pages/steps) when it sees a newer value.
+        const val KEY_RUN_REQUESTED_TS = "run_requested_ts"
         const val ACTION_STOP_AUTOMATION = "com.tatkalcopilot.app.STOP_AUTOMATION"
         const val NOTIF_ID = 4242
         const val KEY_FILL_DATA = "fill_data"
@@ -105,12 +108,28 @@ class TatkalTapService : AccessibilityService() {
     // Password fields read back as bullets, so "filled" is tracked here.
     private val passwordFilled = Collections.synchronizedSet(mutableSetOf<String>())
     private var lastEngineStatus = "idle"
+    private var lastSeenRunTs = 0L
+    @Volatile private var notifShowing = false
 
     private fun engineStatus(s: String) {
+        if (s == lastEngineStatus) return
         lastEngineStatus = s
         try {
             probePrefs().edit().putString(KEY_ENGINE_STATUS, s).apply()
         } catch (_: Exception) { }
+        // Mirror the engine's state in the STOP notification so a stalled
+        // step is visible on the phone without opening the app.
+        if (notifShowing) showStopNotification()
+    }
+
+    private fun clearRunMemory() {
+        paymentLockdown = false
+        donePages.clear()
+        doneSteps.clear()
+        skippedSteps.clear()
+        suggestionPicked.clear()
+        passwordFilled.clear()
+        stepAttempts.clear()
     }
 
     private fun securePrefs(): SharedPreferences {
@@ -166,12 +185,15 @@ class TatkalTapService : AccessibilityService() {
             }
             val notif = builder
                 .setContentTitle("Tatkal Copilot: auto-booking ON")
-                .setContentText("Tap STOP below to halt it immediately")
+                .setContentText("Now: $lastEngineStatus")
+                .setStyle(Notification.BigTextStyle().bigText("Now: $lastEngineStatus\nTap STOP to halt immediately."))
+                .setOnlyAlertOnce(true)
                 .setSmallIcon(android.R.drawable.ic_dialog_alert)
                 .addAction(android.R.drawable.ic_menu_close_clear_cancel, "STOP", pi)
                 .setOngoing(true)
                 .build()
             nm.notify(NOTIF_ID, notif)
+            notifShowing = true
         } catch (_: Exception) { }
     }
 
@@ -179,6 +201,7 @@ class TatkalTapService : AccessibilityService() {
         try {
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.cancel(NOTIF_ID)
+            notifShowing = false
         } catch (_: Exception) { }
     }
 
@@ -265,6 +288,14 @@ class TatkalTapService : AccessibilityService() {
      * or after a timeout.
      */
     private fun runChoreographyFast() {
+        val requested = try {
+            automationPrefs().getLong(KEY_RUN_REQUESTED_TS, 0L)
+        } catch (_: Exception) { 0L }
+        if (requested > lastSeenRunTs) {
+            lastSeenRunTs = requested
+            clearRunMemory()
+        }
+        engineStatus("started — reading page")
         setSessionActive(true)
         try {
         val deadline = System.currentTimeMillis() + 90_000
@@ -363,7 +394,11 @@ class TatkalTapService : AccessibilityService() {
                         if (progressed) {
                             acted = true
                             stepAttempts.remove(stepKey)
-                            if (step.optString("do") == "tap" || step.optString("do") == "tapLogin") {
+                            if (step.optBoolean("repeatWhilePage", false)) {
+                                // Not one-shot: re-tapped until the page stops
+                                // matching (e.g. the language alert closes).
+                                engineStatus("page '$pageId': tapped '${step.optString("text")}'")
+                            } else if (step.optString("do") == "tap" || step.optString("do") == "tapLogin") {
                                 // One-shot: a tap is done the moment it fires.
                                 doneSteps.add(stepKey)
                                 engineStatus("page '$pageId': tapped '${step.optString("do")}:${step.optString("text")}'")
@@ -494,7 +529,11 @@ class TatkalTapService : AccessibilityService() {
                 val fromData = resolveValue(step.optString("textKey"), fillData)
                 val label = if (fromData.isNotEmpty()) fromData else step.optString("text")
                 if (label.isNotEmpty()) {
-                    return tapNodeWithText(root, label)
+                    val ok = tapNodeWithText(root, label, step.optBoolean("gesture", false))
+                    if (ok && step.optBoolean("gesture", false)) {
+                        try { Thread.sleep(800) } catch (_: Exception) { }
+                    }
+                    return ok
                 }
                 return true
             }
@@ -551,7 +590,7 @@ class TatkalTapService : AccessibilityService() {
             for (i in 0 until node.childCount) node.getChild(i)?.let { stack.add(it) }
         }
         val best = candidates.maxByOrNull { it.second.right } ?: return false
-        return best.first.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        return tapAtCenter(best.first) || best.first.performAction(AccessibilityNodeInfo.ACTION_CLICK)
     }
 
     /** Top edge of Chrome's web content (below the address bar), when exposed. */
@@ -653,7 +692,7 @@ class TatkalTapService : AccessibilityService() {
         val stack = ArrayDeque<AccessibilityNodeInfo>()
         stack.add(root)
         var count = 0
-        while (stack.isNotEmpty() && count < 2000) {
+        while (stack.isNotEmpty() && count < 6000) {
             val node = stack.removeLast()
             count++
             node.text?.let { sb.append(it).append(' ') }
@@ -728,28 +767,45 @@ class TatkalTapService : AccessibilityService() {
         }
     }
 
-    private fun tapNodeWithText(root: AccessibilityNodeInfo, text: String): Boolean {
-        val matches = root.findAccessibilityNodeInfosByText(text)
-        val owned = mutableSetOf<AccessibilityNodeInfo>()
-        try {
-            for (n in matches) {
-                owned.add(n)
-                var node: AccessibilityNodeInfo? = n
-                while (node != null && !node.isClickable) {
-                    val parent = node.parent
-                    if (parent != null) owned.add(parent)
-                    node = parent
-                }
-                if (node != null && node.isClickable) {
-                    node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                    return true
-                }
-            }
-            return false
-        } finally {
-            for (n in owned) {
-                try { n.recycle() } catch (_: Exception) { }
-            }
+    /**
+     * Taps the node showing [text]. Walks the tree itself (Chrome's web
+     * content does not reliably answer findAccessibilityNodeInfosByText),
+     * preferring an exact label match, then a short label containing it.
+     * Clicks the node or its nearest clickable ancestor; if Chrome ignores
+     * the click action, falls back to a real tap gesture at its center.
+     */
+    private fun tapNodeWithText(root: AccessibilityNodeInfo, text: String, preferGesture: Boolean = false): Boolean {
+        val want = text.trim().lowercase()
+        fun label(n: AccessibilityNodeInfo): String =
+            ((n.text?.toString() ?: n.contentDescription?.toString()) ?: "").trim().lowercase()
+        val node = findNode(root) { label(it) == want }
+            ?: findNode(root) { val l = label(it); l.length <= want.length + 12 && l.contains(want) }
+            ?: try { root.findAccessibilityNodeInfosByText(text).firstOrNull() } catch (_: Exception) { null }
+            ?: return false
+        var target: AccessibilityNodeInfo? = node
+        var depth = 0
+        while (target != null && !target.isClickable && depth < 6) {
+            target = target.parent
+            depth++
         }
+        if (preferGesture && tapAtCenter(node)) return true
+        val clickNode = if (target != null && target.isClickable) target else node
+        if (clickNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+        return tapAtCenter(node)
+    }
+
+    private fun tapAtCenter(node: AccessibilityNodeInfo): Boolean {
+        return try {
+            val r = android.graphics.Rect()
+            node.getBoundsInScreen(r)
+            if (r.width() <= 0 || r.height() <= 0) return false
+            val path = android.graphics.Path().apply {
+                moveTo(r.exactCenterX(), r.exactCenterY())
+            }
+            val gesture = android.accessibilityservice.GestureDescription.Builder()
+                .addStroke(android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 60))
+                .build()
+            dispatchGesture(gesture, null, null)
+        } catch (_: Exception) { false }
     }
 }
