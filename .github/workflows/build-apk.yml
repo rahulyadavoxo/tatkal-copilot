@@ -41,6 +41,7 @@ jobs:
         # ubuntu runners ship the Android SDK already; just accept licenses
         # and install the exact platform + build-tools this project needs.
         run: |
+          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
           yes | sdkmanager --licenses > /dev/null
           sdkmanager "platforms;android-35" "build-tools;35.0.0"
 
