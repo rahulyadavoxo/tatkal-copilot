@@ -626,7 +626,11 @@ class TatkalTapService : AccessibilityService() {
                 val dy = (b.height() * 0.062f).coerceIn(45f, 120f)
                 // Screen fallback from the device screenshot (909x2000): English
                 // at (533,1647) = 58.6% x, 82.4% y; हिंदी at (357,1647).
-                val dm = resources.displayMetrics
+                val dm = android.util.DisplayMetrics()
+                try {
+                    @Suppress("DEPRECATION")
+                    (getSystemService(WINDOW_SERVICE) as android.view.WindowManager).defaultDisplay.getRealMetrics(dm)
+                } catch (_: Exception) { dm.setTo(resources.displayMetrics) }
                 val sx = dm.widthPixels * (if (hindi) 0.393f else 0.586f)
                 val sy = dm.heightPixels * 0.8235f
                 val boundsOk = b.height() > 300 && b.width() > dm.widthPixels * 0.6f
