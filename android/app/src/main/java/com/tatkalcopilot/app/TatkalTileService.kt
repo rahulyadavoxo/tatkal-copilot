@@ -34,11 +34,39 @@ class TatkalTileService : TileService() {
             updateTileState(false)
             toast("Auto-booking stopped")
         } else {
+            if (!isTapServiceEnabled()) {
+                // Nothing can be automated until the accessibility service
+                // is on: send the user straight to the switch.
+                toast("Turn on 'Tatkal Copilot' in Accessibility first")
+                try {
+                    launch(Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                } catch (_: Exception) { }
+                return
+            }
             setAutomationEnabled(true)
+            markNewRun()
             updateTileState(true)
             toast("Auto-booking ON — opening Chrome")
             openChrome()
         }
+    }
+
+    private fun isTapServiceEnabled(): Boolean = try {
+        val enabled = android.provider.Settings.Secure.getString(
+            contentResolver,
+            android.provider.Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: ""
+        enabled.split(':').any {
+            it.startsWith("$packageName/") && it.endsWith("TatkalTapService")
+        }
+    } catch (_: Exception) { true }
+
+    /** Tells the tap service this is a fresh run, so it forgets steps done in an earlier one. */
+    private fun markNewRun() {
+        try {
+            getSharedPreferences(TatkalTapService.PREFS_AUTOMATION, Context.MODE_PRIVATE)
+                .edit().putLong(TatkalTapService.KEY_RUN_REQUESTED_TS, System.currentTimeMillis()).apply()
+        } catch (_: Exception) { }
     }
 
     private fun toast(msg: String) {
