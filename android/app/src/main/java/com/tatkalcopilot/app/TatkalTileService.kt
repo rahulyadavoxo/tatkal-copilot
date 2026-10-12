@@ -24,17 +24,22 @@ class TatkalTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
-        // Tap = stop if a booking session is actively running, else tap =
-        // start. This matches what the user expects: nothing happens
-        // silently, every tap does something visible.
-        if (isSessionActive()) {
+        // Simple toggle on the master switch, like Wi-Fi/Bluetooth:
+        // tap bright tile -> everything OFF and halts; tap dim tile ->
+        // everything ON and Chrome opens to start booking. The visual
+        // always reflects the pref, synced in onStartListening too.
+        if (isAutomationEnabled()) {
             setAutomationEnabled(false)
             setSessionActive(false)
             updateTileState(false)
-            return
+        } else {
+            setAutomationEnabled(true)
+            updateTileState(true)
+            openChrome()
         }
-        setAutomationEnabled(true)
-        updateTileState(true)
+    }
+
+    private fun openChrome() {
         val targetPkg = findBrowserPackage()
         if (targetPkg == null) {
             // No browser: open the app so the user sees the guidance.
