@@ -13,6 +13,7 @@ on:
       - 'src/**'
       - 'app.json'
       - 'package.json'
+      - 'tools/ci/**'
       - '.github/workflows/build-apk.yml'
 
 permissions:
@@ -37,6 +38,16 @@ jobs:
 
       - name: Install JS dependencies
         run: npm ci --no-audit --no-fund
+
+      # Safety gate before any APK is built: the unit tests include the
+      # WebView engine scanners and the Chrome choreography payment-stop
+      # scanner; the native scan proves TatkalTapService.kt locks down after
+      # the single Pay & Book tap and on any gateway page.
+      - name: Unit tests and payment-stop scanners
+        run: |
+          npx tsc --noEmit
+          npx jest --ci
+          node tools/ci/scan-chrome-payment-stop.js
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
