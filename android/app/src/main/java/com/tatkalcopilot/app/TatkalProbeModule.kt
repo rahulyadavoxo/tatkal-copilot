@@ -109,14 +109,14 @@ class TatkalProbeModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
-    /** Master automation kill-switch: read the toggle. Defaults to ON. */
+    /** Master automation kill-switch: read the toggle. Defaults to OFF (first tile tap starts booking). */
     @ReactMethod
     fun isAutomationEnabled(promise: Promise) {
         try {
             val p = reactContext.getSharedPreferences(
                 TatkalTapService.PREFS_AUTOMATION, Context.MODE_PRIVATE
             )
-            promise.resolve(p.getBoolean(TatkalTapService.KEY_AUTOMATION_ENABLED, true))
+            promise.resolve(p.getBoolean(TatkalTapService.KEY_AUTOMATION_ENABLED, false))
         } catch (e: Exception) {
             promise.reject("ERR", e)
         }
