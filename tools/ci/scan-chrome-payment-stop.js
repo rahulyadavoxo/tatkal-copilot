@@ -45,6 +45,8 @@ else {
   if (gw < 0) hits.push('loop never runs the gateway check');
   if (page < 0) hits.push('loop page matching not found');
   if (gw > page) hits.push('gateway check runs after page matching');
+  const off = loop.indexOf('offIrctcHost(');
+  if (off < 0 || off > page) hits.push('off-IRCTC pause missing or after page matching');
   if (loader >= 0 && gw > loader) hits.push('gateway check runs after the loader wait');
   if (!/lockDownForPayment\(gw\)\s*return/.test(loop)) hits.push('gateway hit does not lock down and return');
   if (!/if \(paymentLockdown\) return/.test(loop)) hits.push('loop does not bail out while locked down');

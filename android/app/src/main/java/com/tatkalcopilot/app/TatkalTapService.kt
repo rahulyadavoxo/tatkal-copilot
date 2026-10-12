@@ -418,9 +418,16 @@ class TatkalTapService : AccessibilityService() {
                     lockDownForPayment(gw)
                     return
                 }
+                // Not on IRCTC yet (Chrome still showing the previous tab while
+                // the tile's IRCTC link loads): act on nothing, just wait.
+                if (offIrctcHost(root, gateway)) {
+                    engineStatus("started — waiting for IRCTC to open in Chrome")
+                    Thread.sleep(500)
+                    continue
+                }
 
                 // 2. "Please Wait..." loader: do nothing, never count as stuck.
-                if (loaderTexts.any { screenText.contains(it) }) {
+                if (loaderTexts.any { loaderVisible(it) }) {
                     if (loaderSince == 0L) loaderSince = now
                     lastLoaderTs = now
                     lastProgress = now
@@ -453,6 +460,7 @@ class TatkalTapService : AccessibilityService() {
                         if (pageId.isEmpty() || donePages.contains(pageId)) continue
                         if (!detectMatches(page.optJSONObject("detect"))) continue
                         pageFound = true
+                        if (page.optInt("stage", 1) >= 5) stepFlags["payment:reached"] = 1
                         if (pageId == "login") stepFlags["login:seen"] = 1
                         val outcome = runPage(page, pageId, fillData)
                         acted = outcome == Res.ACTED || outcome == Res.ACTED_DONE
@@ -1236,13 +1244,30 @@ class TatkalTapService : AccessibilityService() {
         val allow = jsonStrList(gateway?.optJSONArray("allowHosts")).map { it.lowercase() }
             .ifEmpty { listOf("irctc.co.in") }
         val host = urlHost(root)
-        if (host != null && allow.none { host == it || host.endsWith(".$it") }) {
+        // Leaving IRCTC counts as the gateway only once the run reached the
+        // review/payment pages. Before that a foreign host is just the old tab
+        // Chrome shows while IRCTC loads (offIrctcHost pauses the run instead).
+        if (stepFlags["payment:reached"] == 1 && host != null && allow.none { host == it || host.endsWith(".$it") }) {
             return "Left IRCTC for $host — you're at the payment step. Pay by hand."
         }
         val texts = jsonStrList(gateway?.optJSONArray("anyContains")).map { it.lowercase() }
         val hit = texts.firstOrNull { screenText.contains(it) }
         if (hit != null) return "Payment page detected — pay by hand."
         return null
+    }
+
+    /** A short, on-screen node shows [t] (hidden loader markup in the DOM doesn't count). */
+    private fun loaderVisible(t: String): Boolean = snap.any { s ->
+        s.lower.contains(t) && s.lower.length <= 60 && s.bounds.width() > 0 && s.bounds.height() > 0 &&
+            (try { s.node.isVisibleToUser } catch (_: Exception) { false })
+    }
+
+    /** True when the address bar shows a host outside the allowlist. */
+    private fun offIrctcHost(root: AccessibilityNodeInfo, gateway: JSONObject?): Boolean {
+        val allow = jsonStrList(gateway?.optJSONArray("allowHosts")).map { it.lowercase() }
+            .ifEmpty { listOf("irctc.co.in") }
+        val host = urlHost(root) ?: return false
+        return allow.none { host == it || host.endsWith(".$it") }
     }
 
     /** Host shown in the browser's address bar, when it is visible. */
