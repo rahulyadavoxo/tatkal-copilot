@@ -28,13 +28,23 @@ class TatkalTileService : TileService() {
         // tap bright tile -> everything OFF and halts; tap dim tile ->
         // everything ON and Chrome opens to start booking. The visual
         // always reflects the pref, synced in onStartListening too.
+        // A toast confirms the tap registered (debug aid).
+        try {
+            android.widget.Toast.makeText(this, "Tatkal tile tapped", android.widget.Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) { }
         if (isAutomationEnabled()) {
             setAutomationEnabled(false)
             setSessionActive(false)
             updateTileState(false)
+            try {
+                android.widget.Toast.makeText(this, "Auto-booking OFF", android.widget.Toast.LENGTH_SHORT).show()
+            } catch (_: Exception) { }
         } else {
             setAutomationEnabled(true)
             updateTileState(true)
+            try {
+                android.widget.Toast.makeText(this, "Auto-booking ON — opening Chrome", android.widget.Toast.LENGTH_SHORT).show()
+            } catch (_: Exception) { }
             openChrome()
         }
     }
