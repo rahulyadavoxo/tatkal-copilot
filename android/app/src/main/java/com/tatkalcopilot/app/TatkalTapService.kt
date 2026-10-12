@@ -608,6 +608,27 @@ class TatkalTapService : AccessibilityService() {
             val cands = snap.filter { c -> !c.editable && wants.any { c.lower == it } && c.bounds.width() > 0 }
                 .sortedBy { c -> if (anchor == null) 0 else Math.abs(c.bounds.centerY() - anchor.bounds.centerY()) }
             val rec = taps.getOrPut(key) { TapRec(0, 0L) }
+            if (cands.isEmpty() && anchor != null) {
+                // Device 2026-10-13: Chrome shows IRCTC's alert as ONE Button
+                // ("Confirmation. ... Please select your preferred language ...
+                // press the Enter key") with no English/Hindi buttons. Rotate:
+                // click it, tap its lower part (where OK sits), tap its centre,
+                // then the × close button.
+                val dlg = snap.firstOrNull { it.lower.contains("preferred language") && (it.clickable || it.node.className?.toString() == "android.widget.Button") } ?: anchor
+                val x = snap.firstOrNull { it.lower == "×" || it.lower == "✕" || it.lower == "close" }
+                val attempt = rec.count % 4
+                rec.count += 1; rec.lastTs = System.currentTimeMillis()
+                val b = dlg.bounds
+                val ok = when (attempt) {
+                    0 -> clickNodeOrAncestor(dlg.node)
+                    1 -> b.height() > 0 && gestureTap(b.exactCenterX(), (b.bottom - minOf(60, b.height() / 6)).toFloat())
+                    2 -> b.height() > 0 && gestureTap(b.exactCenterX(), b.exactCenterY())
+                    else -> x != null && tapNode(x)
+                }
+                engineStatus(stageStatus(stage, say, " — alert has no language buttons; attempt ${attempt + 1}/4 ${if (ok) "sent" else "failed"}"))
+                sleep(800)
+                return if (ok) Res.ACTED else Res.MISSING
+            }
             val n = if (cands.isNotEmpty()) cands[rec.count % cands.size] else findTapTarget(labels, step)
             if (n == null) {
                 engineStatus(stageStatus(stage, say, " — '${wants.firstOrNull()}' not found (${snap.size} nodes)"))
