@@ -81,28 +81,36 @@ export const DEFAULT_CHOREO_MAP = {
         allContains: ['preferred language'],
         anyOf: [['preferred language'], ['english', 'हिंदी']],
       },
-      steps: [{ do: 'tap', text: 'English' }],
+      // textKey: the language saved in the app (English / हिंदी).
+      steps: [{ do: 'tap', textKey: 'site.language', text: 'English' }],
     },
     {
       // IRCTC login form: fill the saved credentials (user decision
       // 2026-10-12). Filled on IRCTC's official login page only. Does NOT
       // tap login/submit — the user solves the CAPTCHA and taps by hand.
       id: 'login',
-      detect: { allContains: ['user name', 'password'] },
+      detect: {
+        allContains: ['user name', 'password'],
+        anyOf: [['user name', 'password'], ['username', 'password'], ['captcha', 'password']],
+      },
       steps: [
-        { do: 'fillField', labelContains: ['user name'], valueKey: 'irctc.username' },
-        { do: 'fillField', labelContains: ['password'], valueKey: 'irctc.password' },
+        { do: 'fillField', labelContains: ['user name', 'username', 'login id'], loginUser: true, valueKey: 'irctc.username' },
+        { do: 'fillField', labelContains: ['password'], passwordField: true, valueKey: 'irctc.password' },
       ],
     },
     {
       id: 'search',
-      detect: { allContains: ['search trains'] },
+      // Never while the login form is up: its inputs would be mistaken
+      // for From/To (fields are matched by position).
+      detect: { allContains: ['search trains'], noneContains: ['password', 'captcha'] },
       steps: [
         // If logged out, IRCTC shows a LOGIN button in the header. Tap it
         // to open the login form; the 'login' safety page then takes over
         // (does nothing) until the user finishes logging in manually.
         // If already logged in the button is absent and this is a no-op.
-        { do: 'tap', text: 'LOGIN' },
+        // tapLogin: LOGIN text, a login/profile icon, or the top-right
+        // person glyph; skipped when already logged in.
+        { do: 'tapLogin' },
         // IRCTC's inputs expose no accessible labels (probe 2026-10-12);
         // match by position: 0 = From, 1 = To, 2 = Date.
         { do: 'fillField', fieldIndex: 0, valueKey: 'trip.fromName', pickSuggestion: true },
