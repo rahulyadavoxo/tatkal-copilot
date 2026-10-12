@@ -55,9 +55,9 @@ class TatkalAutofillService : AutofillService() {
             .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
             .build()
         return EncryptedSharedPreferences.create(
-            this,
             PREFS_SECURE,
             masterKey,
+            this,
             EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
             EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
         )
@@ -267,7 +267,7 @@ class TatkalAutofillService : AutofillService() {
             className?.contains("EditText") == true
         ) {
             val f = JSONObject()
-            f.put("hints", JSONArray(hints?.toList() ?: emptyList()))
+            f.put("hints", JSONArray(hints?.toList() ?: emptyList<String>()))
             f.put("idEntry", idEntry ?: "")
             f.put("hint", hint ?: "")
             f.put("className", className ?: "")

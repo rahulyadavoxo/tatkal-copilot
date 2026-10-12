@@ -9,7 +9,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
-import com.facebook.react.bridge.ReactPackage
+import com.facebook.react.ReactPackage
 import com.facebook.react.uimanager.ViewManager
 import org.json.JSONObject
 
@@ -17,7 +17,7 @@ import org.json.JSONObject
  * Bridge for the Phase 0/1 automation probe: service status, settings
  * deep-links, probe reports, and the test-tap command.
  */
-class TatkalProbeModule(reactContext: ReactApplicationContext) :
+class TatkalProbeModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
     override fun getName() = "TatkalProbe"
@@ -30,7 +30,7 @@ class TatkalProbeModule(reactContext: ReactApplicationContext) :
         try {
             val enabled = Settings.Secure.getString(
                 reactContext.contentResolver,
-                Settings.Secure.AUTOFILL_SERVICE
+                "autofill_service"
             ) ?: ""
             promise.resolve(enabled.contains("com.tatkalcopilot.app"))
         } catch (e: Exception) {
@@ -128,9 +128,9 @@ class TatkalProbeModule(reactContext: ReactApplicationContext) :
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                 .build()
             val secure = EncryptedSharedPreferences.create(
-                reactContext,
                 TatkalAutofillService.PREFS_SECURE,
                 masterKey,
+                reactContext,
                 EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
                 EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
             )
