@@ -1,7 +1,14 @@
 package com.tatkalcopilot.app
 
 import android.accessibilityservice.AccessibilityService
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
+import android.os.Build
 import android.os.Bundle
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -39,6 +46,13 @@ class TatkalTapService : AccessibilityService() {
         const val KEY_TAP_RESULT = "probe_tap_result"
         const val KEY_ENGINE_STATUS = "tap_engine_status"
         const val KEY_CHOREO_MAP = "choreo_map"
+        // Master kill-switch: when false, the tap engine never starts and a
+        // running loop halts on its next iteration. Toggled from the app UI
+        // or the STOP action on the persistent notification.
+        const val PREFS_AUTOMATION = "tatkal_automation"
+        const val KEY_AUTOMATION_ENABLED = "automation_enabled"
+        const val ACTION_STOP_AUTOMATION = "com.tatkalcopilot.app.STOP_AUTOMATION"
+        const val NOTIF_ID = 4242
         const val KEY_FILL_DATA = "fill_data"
         const val CHROME_PKG = "com.android.chrome"
 
@@ -107,6 +121,59 @@ class TatkalTapService : AccessibilityService() {
     private fun probePrefs(): SharedPreferences =
         getSharedPreferences(PREFS_PROBE, MODE_PRIVATE)
 
+    private fun automationPrefs(): SharedPreferences =
+        getSharedPreferences(PREFS_AUTOMATION, MODE_PRIVATE)
+
+    private fun isAutomationEnabled(): Boolean = try {
+        automationPrefs().getBoolean(KEY_AUTOMATION_ENABLED, true)
+    } catch (_: Exception) { true }
+
+    /** Persistent notification with a STOP action — the instant kill-switch. */
+    private fun showStopNotification() {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val channelId = "tatkal_automation"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val ch = NotificationChannel(
+                    channelId,
+                    "Booking automation",
+                    NotificationManager.IMPORTANCE_HIGH
+                )
+                ch.description = "Stop the auto-booking at any time"
+                nm.createNotificationChannel(ch)
+            }
+            val stopIntent = Intent(ACTION_STOP_AUTOMATION).apply {
+                setPackage(packageName)
+            }
+            var flags = PendingIntent.FLAG_UPDATE_CURRENT
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                flags = flags or PendingIntent.FLAG_IMMUTABLE
+            }
+            val pi = PendingIntent.getBroadcast(this, 0, stopIntent, flags)
+            val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Notification.Builder(this, channelId)
+            } else {
+                @Suppress("DEPRECATION")
+                Notification.Builder(this).setPriority(Notification.PRIORITY_HIGH)
+            }
+            val notif = builder
+                .setContentTitle("Tatkal Copilot: auto-booking ON")
+                .setContentText("Tap STOP below to halt it immediately")
+                .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                .addAction(android.R.drawable.ic_menu_close_clear_cancel, "STOP", pi)
+                .setOngoing(true)
+                .build()
+            nm.notify(NOTIF_ID, notif)
+        } catch (_: Exception) { }
+    }
+
+    private fun hideStopNotification() {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(NOTIF_ID)
+        } catch (_: Exception) { }
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         val pkg = event.packageName?.toString() ?: return
@@ -144,15 +211,22 @@ class TatkalTapService : AccessibilityService() {
             // Real choreography: fast background loop (debounced). Speed
             // matters for Tatkal — we run steps back-to-back with short
             // settles instead of waiting a full accessibility-event cycle
-            // between actions.
+            // between actions. The master kill-switch gates every start.
+            if (!isAutomationEnabled()) {
+                hideStopNotification()
+                engineStatus("automation is OFF")
+                return
+            }
             synchronized(this) {
                 if (!choreographyRunning) {
                     choreographyRunning = true
+                    showStopNotification()
                     Thread {
                         try {
                             runChoreographyFast()
                         } catch (_: Exception) {
                         } finally {
+                            hideStopNotification()
                             synchronized(this) { choreographyRunning = false }
                         }
                     }.start()
@@ -182,6 +256,11 @@ class TatkalTapService : AccessibilityService() {
     private fun runChoreographyFast() {
         val deadline = System.currentTimeMillis() + 90_000
         while (System.currentTimeMillis() < deadline) {
+            // Master kill-switch: halt on the next iteration, no exceptions.
+            if (!isAutomationEnabled()) {
+                engineStatus("automation stopped by user")
+                return
+            }
             if (paymentLockdown) {
                 engineStatus("payment lockdown — silent")
                 return

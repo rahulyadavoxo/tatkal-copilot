@@ -54,6 +54,7 @@ import {
   BackHandler,
   Linking,
   ScrollView,
+  Switch,
   Text,
   TextInput,
   View,
@@ -95,7 +96,7 @@ import {
   type PostSearchPlan,
 } from '../core/postSearchEngine';
 import { buildReviewScript, type ReviewPaymentMode, type ReviewPlan } from '../core/reviewEngine';
-import { syncAutofillData, openInChromeApp } from '../native/tatkalProbe';
+import { syncAutofillData, openInChromeApp, isAutomationEnabled, setAutomationEnabled } from '../native/tatkalProbe';
 import {
   buildPaymentScript,
   type PaymentMethodChoice,
@@ -215,6 +216,9 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
   const webRef = useRef<WebViewInstance | null>(null);
   const [trip, setTrip] = useState<Trip | null>(null);
   const [fillState, setFillState] = useState<FillState>('idle');
+  // Master kill-switch for the tap automation. When OFF, the tap service
+  // never starts and a running automation halts immediately.
+  const [automationOn, setAutomationOn] = useState(true);
   const [events, setEvents] = useState<Array<FillEvent | PrebookEvent>>([]);
   const [otpRequired, setOtpRequired] = useState(false);
   const [otpDigits, setOtpDigits] = useState<string[]>(['', '', '', '', '', '']);
@@ -297,6 +301,11 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
   useEffect(() => {
     void loadTrips().then((ts) => setTrip(ts.find((t) => t.id === tripId) ?? null));
   }, [tripId]);
+
+  // Load the master automation kill-switch state.
+  useEffect(() => {
+    void isAutomationEnabled().then(setAutomationOn);
+  }, []);
 
   // Restore the last IRCTC page before the WebView first mounts, so it never
   // flashes the homepage and then jumps.
@@ -1331,6 +1340,43 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
           onPress={onPrebookTap}
         />
 
+        {/* Master kill-switch for the tap automation. When OFF, the tap
+            service never starts and a running automation halts immediately.
+            A persistent notification with a STOP button also appears while
+            automation runs, so it can be killed from anywhere. */}
+        <View
+          style={{
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginTop: theme.spacing.md,
+            paddingVertical: theme.spacing.sm,
+            paddingHorizontal: theme.spacing.md,
+            borderRadius: 12,
+            backgroundColor: automationOn ? theme.colors.surface : '#3B1F1F',
+            borderWidth: 1,
+            borderColor: automationOn ? theme.colors.line : '#B3261E',
+          }}
+        >
+          <View style={{ flex: 1, marginRight: theme.spacing.sm }}>
+            <Text style={[theme.typography.body, { fontWeight: '700' }]}>
+              Auto-booking {automationOn ? 'ON' : 'OFF'}
+            </Text>
+            <Text style={[theme.typography.caption, { color: theme.colors.muted }]}>
+              {automationOn
+                ? 'The app will fill and tap in Chrome until payment.'
+                : 'Automation halted. Turn ON to use auto mode.'}
+            </Text>
+          </View>
+          <Switch
+            value={automationOn}
+            onValueChange={(v) => {
+              setAutomationOn(v);
+              void setAutomationEnabled(v);
+            }}
+          />
+        </View>
+
         {/* Booking automation (native services): syncs the trip data to the
             encrypted native store, then opens IRCTC in real Chrome where the
             fill + tap services take over until the payment page. */}
@@ -1340,6 +1386,12 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
           fullWidth
           onPress={() => {
             void (async () => {
+              if (!automationOn) {
+                setPrebookNotice(
+                  'Auto-booking is turned OFF. Turn it ON above to use auto mode.',
+                );
+                return;
+              }
               const synced = await syncAutofillData(tripId);
               if (!synced) {
                 setPrebookNotice(

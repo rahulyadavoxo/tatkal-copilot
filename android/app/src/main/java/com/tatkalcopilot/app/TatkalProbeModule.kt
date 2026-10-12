@@ -1,5 +1,6 @@
 package com.tatkalcopilot.app
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
@@ -103,6 +104,32 @@ class TatkalProbeModule(private val reactContext: ReactApplicationContext) :
             reactContext.startActivity(explicit)
             val kind = if (CHROME_PACKAGES.contains(targetPkg)) "chrome" else "browser"
             promise.resolve("$kind:$targetPkg")
+        } catch (e: Exception) {
+            promise.reject("ERR", e)
+        }
+    }
+
+    /** Master automation kill-switch: read the toggle. Defaults to ON. */
+    @ReactMethod
+    fun isAutomationEnabled(promise: Promise) {
+        try {
+            val p = reactContext.getSharedPreferences(
+                TatkalTapService.PREFS_AUTOMATION, Context.MODE_PRIVATE
+            )
+            promise.resolve(p.getBoolean(TatkalTapService.KEY_AUTOMATION_ENABLED, true))
+        } catch (e: Exception) {
+            promise.reject("ERR", e)
+        }
+    }
+
+    /** Master automation kill-switch: set the toggle. */
+    @ReactMethod
+    fun setAutomationEnabled(on: Boolean, promise: Promise) {
+        try {
+            reactContext.getSharedPreferences(
+                TatkalTapService.PREFS_AUTOMATION, Context.MODE_PRIVATE
+            ).edit().putBoolean(TatkalTapService.KEY_AUTOMATION_ENABLED, on).apply()
+            promise.resolve(true)
         } catch (e: Exception) {
             promise.reject("ERR", e)
         }

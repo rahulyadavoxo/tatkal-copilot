@@ -15,6 +15,8 @@ interface ProbeNativeModule {
   writeAutofillData(fieldMap: string, choreoMap: string, fillData: string): Promise<boolean>;
   openInChromeApp(url: string): Promise<string>;
   getBrowserInfo(): Promise<string>;
+  isAutomationEnabled(): Promise<boolean>;
+  setAutomationEnabled(on: boolean): Promise<boolean>;
 }
 
 const M = NativeModules.TatkalProbe as ProbeNativeModule | undefined;
@@ -119,6 +121,23 @@ export async function getBrowserInfo(): Promise<string | null> {
     return (await M?.getBrowserInfo()) ?? null;
   } catch {
     return null;
+  }
+}
+
+/** Master kill-switch for the tap automation. Defaults to ON. */
+export async function isAutomationEnabled(): Promise<boolean> {
+  try {
+    return (await M?.isAutomationEnabled()) ?? true;
+  } catch {
+    return true;
+  }
+}
+
+export async function setAutomationEnabled(on: boolean): Promise<void> {
+  try {
+    await M?.setAutomationEnabled(on);
+  } catch {
+    // best-effort
   }
 }
 
