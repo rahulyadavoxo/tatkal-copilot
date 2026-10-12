@@ -6,6 +6,14 @@ name: Build Android APK
 # Actions tab, or via the API (workflow_dispatch).
 on:
   workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'android/**'
+      - 'src/**'
+      - 'app.json'
+      - 'package.json'
+      - '.github/workflows/build-apk.yml'
 
 jobs:
   build:
