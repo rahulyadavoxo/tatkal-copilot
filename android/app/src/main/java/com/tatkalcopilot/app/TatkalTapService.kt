@@ -9,6 +9,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Collections
 
 /**
  * Taps IRCTC booking buttons in real Chrome — Search Trains, Book Now,
@@ -67,16 +68,20 @@ class TatkalTapService : AccessibilityService() {
         )
     }
 
-    private var paymentLockdown = false
-    private val donePages = mutableSetOf<String>()
+    @Volatile private var paymentLockdown = false
+    @Volatile private var choreographyRunning = false
+    // Thread-safe: mutated from the background choreography loop; cleared
+    // from onAccessibilityEvent when the user leaves the browser.
+    private val donePages = Collections.synchronizedSet(mutableSetOf<String>())
+    private val doneSteps = Collections.synchronizedSet(mutableSetOf<String>())
     // Stuck-step guard: a fill step whose field never appears must not wedge
     // the whole flow forever. After enough fruitless attempts we skip it so
     // later steps (especially taps) still run. Keyed by page+step index.
-    private val stepAttempts = mutableMapOf<String, Int>()
-    private val skippedSteps = mutableSetOf<String>()
+    private val stepAttempts = Collections.synchronizedMap(mutableMapOf<String, Int>())
+    private val skippedSteps = Collections.synchronizedSet(mutableSetOf<String>())
     // Autocomplete steps (pickSuggestion): the suggestion tap is a separate
     // phase — setting the text alone must NOT count as done.
-    private val suggestionPicked = mutableSetOf<String>()
+    private val suggestionPicked = Collections.synchronizedSet(mutableSetOf<String>())
     private var lastEngineStatus = "idle"
 
     private fun engineStatus(s: String) {
@@ -109,6 +114,10 @@ class TatkalTapService : AccessibilityService() {
             // Left the browser: reset the session state.
             paymentLockdown = false
             donePages.clear()
+            doneSteps.clear()
+            skippedSteps.clear()
+            suggestionPicked.clear()
+            stepAttempts.clear()
             return
         }
         try {
@@ -132,8 +141,23 @@ class TatkalTapService : AccessibilityService() {
                 return
             }
 
-            // Real choreography.
-            runChoreography(root)
+            // Real choreography: fast background loop (debounced). Speed
+            // matters for Tatkal — we run steps back-to-back with short
+            // settles instead of waiting a full accessibility-event cycle
+            // between actions.
+            synchronized(this) {
+                if (!choreographyRunning) {
+                    choreographyRunning = true
+                    Thread {
+                        try {
+                            runChoreographyFast()
+                        } catch (_: Exception) {
+                        } finally {
+                            synchronized(this) { choreographyRunning = false }
+                        }
+                    }.start()
+                }
+            }
         } catch (_: Exception) {
             // The service must never crash.
         }
@@ -147,88 +171,136 @@ class TatkalTapService : AccessibilityService() {
     // Choreography engine
     // ------------------------------------------------------------------
 
-    private fun runChoreography(root: AccessibilityNodeInfo) {
-        if (paymentLockdown) {
-            engineStatus("payment lockdown — silent")
-            return
-        }
+    /**
+     * Fast choreography loop. Runs on a background thread (never the main
+     * thread) and executes pending steps back-to-back with short settles,
+     * instead of waiting a full accessibility-event cycle between actions.
+     * Taps are one-shot (tracked in doneSteps) so nothing is ever tapped
+     * twice. Aborts on payment screens, when the user leaves the browser,
+     * or after a timeout.
+     */
+    private fun runChoreographyFast() {
+        val deadline = System.currentTimeMillis() + 90_000
+        while (System.currentTimeMillis() < deadline) {
+            if (paymentLockdown) {
+                engineStatus("payment lockdown — silent")
+                return
+            }
 
-        val screenText = collectText(root).lowercase()
+            val root = try { rootInActiveWindow } catch (_: Exception) { null }
+            if (root == null) {
+                Thread.sleep(500)
+                continue
+            }
+            val pkg = try { root.packageName?.toString() } catch (_: Exception) { null }
+            if (pkg == null || !BROWSER_PACKAGES.contains(pkg)) {
+                try { root.recycle() } catch (_: Exception) { }
+                return // user left the browser
+            }
 
-        val prefs = try { securePrefs() } catch (_: Exception) {
-            engineStatus("secure prefs unavailable")
-            return
-        }
-        val mapJson = prefs.getString(KEY_CHOREO_MAP, null) ?: run {
-            engineStatus("no choreography map — did auto-booking sync run?")
-            return
-        }
-        val dataJson = prefs.getString(KEY_FILL_DATA, null) ?: run {
-            engineStatus("no fill data — did auto-booking sync run?")
-            return
-        }
-        val map: JSONObject
-        val fillData: JSONObject
-        try {
-            map = JSONObject(mapJson)
-            fillData = JSONObject(dataJson)
-        } catch (_: Exception) { return }
+            val screenText = try { collectText(root).lowercase() } catch (_: Exception) { "" }
 
-        // 1. PAYMENT KILL-SWITCH — always first, no exceptions.
-        val killAny = jsonStrList(map.optJSONObject("paymentKill")?.optJSONArray("anyContains"))
-        if (killAny.any { screenText.contains(it.lowercase()) }) {
-            paymentLockdown = true
-            return
-        }
+            val prefs = try { securePrefs() } catch (_: Exception) {
+                engineStatus("secure prefs unavailable")
+                try { root.recycle() } catch (_: Exception) { }
+                return
+            }
+            val mapJson = prefs.getString(KEY_CHOREO_MAP, null) ?: run {
+                engineStatus("no choreography map — did auto-booking sync run?")
+                try { root.recycle() } catch (_: Exception) { }
+                return
+            }
+            val dataJson = prefs.getString(KEY_FILL_DATA, null) ?: run {
+                engineStatus("no fill data — did auto-booking sync run?")
+                try { root.recycle() } catch (_: Exception) { }
+                return
+            }
+            val map: JSONObject
+            val fillData: JSONObject
+            try {
+                map = JSONObject(mapJson)
+                fillData = JSONObject(dataJson)
+            } catch (_: Exception) {
+                try { root.recycle() } catch (_: Exception) { }
+                return
+            }
 
-        // 2. Detect the current page.
-        val pages = map.optJSONArray("pages") ?: run {
-            engineStatus("map has no pages")
-            return
-        }
-        var sawPage = false
-        for (i in 0 until pages.length()) {
-            val page = pages.optJSONObject(i) ?: continue
-            val pageId = page.optString("id")
-            if (pageId.isEmpty() || donePages.contains(pageId)) continue
-            val detectAll = jsonStrList(page.optJSONObject("detect")?.optJSONArray("allContains"))
-            if (detectAll.isEmpty() || !detectAll.all { screenText.contains(it.lowercase()) }) continue
-            sawPage = true
+            // 1. PAYMENT KILL-SWITCH — always first, no exceptions.
+            val killAny = jsonStrList(map.optJSONObject("paymentKill")?.optJSONArray("anyContains"))
+            if (killAny.any { screenText.contains(it.lowercase()) }) {
+                paymentLockdown = true
+                engineStatus("payment lockdown — silent")
+                try { root.recycle() } catch (_: Exception) { }
+                return
+            }
 
-            // 3. Execute the next pending step (one action per event).
-            val steps = page.optJSONArray("steps") ?: continue
-            var allDone = true
-            for (s in 0 until steps.length()) {
-                val step = steps.optJSONObject(s) ?: continue
-                val stepKey = "$pageId:$s"
-                if (skippedSteps.contains(stepKey)) continue
-                if (isStepDone(stepKey, step, root, fillData)) continue
-                allDone = false
-                val progressed = executeStep(stepKey, step, root, fillData)
-                if (!progressed) {
-                    val n = (stepAttempts[stepKey] ?: 0) + 1
-                    stepAttempts[stepKey] = n
-                    if (n >= 15) {
-                        skippedSteps.add(stepKey)
-                        engineStatus("page '$pageId': skipped stuck step $s (${step.optString("do")}) after $n tries")
-                    } else {
-                        engineStatus("page '$pageId': step $s (${step.optString("do")}) no field yet (try $n)")
+            // 2. Detect the current page and run its pending steps.
+            val pages = map.optJSONArray("pages")
+            var pageFound = false
+            var acted = false
+            if (pages != null) {
+                for (i in 0 until pages.length()) {
+                    val page = pages.optJSONObject(i) ?: continue
+                    val pageId = page.optString("id")
+                    if (pageId.isEmpty() || donePages.contains(pageId)) continue
+                    val detectAll = jsonStrList(page.optJSONObject("detect")?.optJSONArray("allContains"))
+                    if (detectAll.isEmpty() || !detectAll.all { screenText.contains(it.lowercase()) }) continue
+                    pageFound = true
+
+                    val steps = page.optJSONArray("steps") ?: break
+                    var allDone = true
+                    for (s in 0 until steps.length()) {
+                        val step = steps.optJSONObject(s) ?: continue
+                        val stepKey = "$pageId:$s"
+                        if (skippedSteps.contains(stepKey) || doneSteps.contains(stepKey)) continue
+                        if (isStepDone(stepKey, step, root, fillData)) {
+                            doneSteps.add(stepKey)
+                            continue
+                        }
+                        allDone = false
+                        val progressed = try {
+                            executeStep(stepKey, step, root, fillData)
+                        } catch (_: Exception) { false }
+                        if (progressed) {
+                            acted = true
+                            stepAttempts.remove(stepKey)
+                            if (step.optString("do") == "tap") {
+                                // One-shot: a tap is done the moment it fires.
+                                doneSteps.add(stepKey)
+                                engineStatus("page '$pageId': tapped '${step.optString("text")}'")
+                            } else {
+                                engineStatus("page '$pageId': did step $s (${step.optString("do")})")
+                            }
+                        } else {
+                            val n = (stepAttempts[stepKey] ?: 0) + 1
+                            stepAttempts[stepKey] = n
+                            if (n >= 25) {
+                                skippedSteps.add(stepKey)
+                                engineStatus("page '$pageId': skipped stuck step $s after $n tries")
+                            } else {
+                                engineStatus("page '$pageId': step $s waiting (try $n)")
+                            }
+                        }
+                        break // re-fetch a fresh tree after each action
                     }
-                } else {
-                    stepAttempts.remove(stepKey)
-                    engineStatus("page '$pageId': did step $s (${step.optString("do")})")
+                    if (allDone) {
+                        donePages.add(pageId)
+                        engineStatus("page '$pageId' complete")
+                    }
+                    break // one page per pass
                 }
-                break // one action per event: human-paced
             }
-            if (allDone) {
-                donePages.add(pageId)
-                engineStatus("page '$pageId' complete")
+            try { root.recycle() } catch (_: Exception) { }
+            if (!pageFound) {
+                if (!paymentLockdown) engineStatus("no page matched (${screenText.length} chars of text seen)")
+                Thread.sleep(600)
+            } else if (!acted) {
+                Thread.sleep(350)
+            } else {
+                Thread.sleep(300)
             }
-            return // one page per event
         }
-        if (!sawPage) {
-            engineStatus("no page matched (${screenText.length} chars of text seen)")
-        }
+        engineStatus("choreography timed out")
     }
 
     private fun isStepDone(

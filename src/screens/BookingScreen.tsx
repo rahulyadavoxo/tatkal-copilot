@@ -765,38 +765,26 @@ export default function BookingScreen({ nav, tripId }: { nav: Nav; tripId: strin
     }
   }, []);
 
-  // Genuine Chrome tab (Custom Tabs): real browser identity, shared cookies
-  // Opens IRCTC in the REAL Chrome app (explicit com.android.chrome intent),
+  // Opens IRCTC in the REAL browser app (explicit intent, no chooser),
   // not a Custom Tab and not the WebView. The fill + tap services gate on
-  // real-browser packages, so only the full Chrome app guarantees they
-  // engage. Asks for the user's permission first. Falls back to the default
-  // browser when Chrome isn't installed.
+  // real-browser packages, so only the full browser app guarantees they
+  // engage. Tapping the button IS the permission — no extra confirmation
+  // dialog, because every second counts in Tatkal.
   const openInChrome = useCallback(() => {
-    Alert.alert(
-      'Open IRCTC in Chrome?',
-      'This opens IRCTC\u2019s train-search page in your Chrome app, using your Chrome login — IRCTC works normally there.\n\nTatkal Copilot cannot see anything you type there. Your password stays between you and IRCTC.',
-      [
-        { text: 'Not now', style: 'cancel' },
-        {
-          text: 'Allow & continue',
-          onPress: () =>
-            void (async () => {
-              const where = await openInChromeApp(IRCTC_TRAIN_SEARCH_URL);
-              if (!where) {
-                setPrebookNotice(
-                  'Could not open a browser. Please install Chrome from the Play Store, then try again.',
-                );
-              } else if (where.startsWith('browser:')) {
-                // No Chrome installed: automation still runs in the default
-                // browser, but IRCTC works best in Chrome.
-                setPrebookNotice(
-                  'Opened in your default browser instead of Chrome. For the smoothest booking, install Chrome from the Play Store.',
-                );
-              }
-            })(),
-        },
-      ],
-    );
+    void (async () => {
+      const where = await openInChromeApp(IRCTC_TRAIN_SEARCH_URL);
+      if (!where) {
+        setPrebookNotice(
+          'Could not open a browser. Please install Chrome from the Play Store, then try again.',
+        );
+      } else if (where.startsWith('browser:')) {
+        // No Chrome installed: automation still runs in the default
+        // browser, but IRCTC works best in Chrome.
+        setPrebookNotice(
+          'Opened in your default browser instead of Chrome. For the smoothest booking, install Chrome from the Play Store.',
+        );
+      }
+    })();
   }, []);
 
   const onShouldStartLoadWithRequest = useCallback((req: ShouldStartLoadRequest) => {
