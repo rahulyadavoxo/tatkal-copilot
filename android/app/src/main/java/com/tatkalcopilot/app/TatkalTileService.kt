@@ -19,25 +19,20 @@ class TatkalTileService : TileService() {
 
     override fun onStartListening() {
         super.onStartListening()
-        val tile = qsTile ?: return
-        val on = isAutomationEnabled()
-        tile.state = if (on) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
-        tile.label = "Tatkal auto-book"
-        tile.updateTile()
+        updateTileState(isAutomationEnabled())
     }
 
     override fun onClick() {
         super.onClick()
-        if (!isAutomationEnabled()) {
-            // Automation is OFF: take the user to the app so they can turn
-            // it on deliberately instead of silently doing nothing.
-            val launch = packageManager.getLaunchIntentForPackage(packageName)
-            if (launch != null) {
-                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                startActivityAndCollapse(launch)
-            }
+        // The tile is a proper toggle: tap to arm + start, tap again to
+        // disarm + halt. This is the one-tap kill switch from anywhere.
+        if (isAutomationEnabled()) {
+            setAutomationEnabled(false)
+            updateTileState(false)
             return
         }
+        setAutomationEnabled(true)
+        updateTileState(true)
         val targetPkg = findBrowserPackage()
         if (targetPkg == null) {
             // No browser: open the app so the user sees the guidance.
@@ -56,11 +51,23 @@ class TatkalTileService : TileService() {
             startActivityAndCollapse(open)
         } catch (_: Exception) {
             // Fall through: collapse only.
-            try { startActivityAndCollapse(
-                packageManager.getLaunchIntentForPackage(packageName)!!
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            ) } catch (_: Exception) { }
         }
+    }
+
+    private fun updateTileState(on: Boolean) {
+        val tile = qsTile ?: return
+        tile.state = if (on) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
+        tile.label = "Tatkal auto-book"
+        tile.updateTile()
+    }
+
+    private fun setAutomationEnabled(on: Boolean) {
+        try {
+            getSharedPreferences(
+                TatkalTapService.PREFS_AUTOMATION,
+                Context.MODE_PRIVATE
+            ).edit().putBoolean(TatkalTapService.KEY_AUTOMATION_ENABLED, on).apply()
+        } catch (_: Exception) { }
     }
 
     private fun isAutomationEnabled(): Boolean = try {
