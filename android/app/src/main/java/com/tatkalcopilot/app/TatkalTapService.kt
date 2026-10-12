@@ -624,13 +624,19 @@ class TatkalTapService : AccessibilityService() {
                 val hindi = wants.any { it == "हिंदी" }
                 val fx = b.left + b.width() * (if (hindi) 0.38f else 0.585f)
                 val dy = (b.height() * 0.062f).coerceIn(45f, 120f)
-                val ok = b.height() > 0 && when (attempt) {
-                    0 -> gestureTap(fx, b.bottom - dy)
-                    1 -> gestureTap(fx, b.bottom - dy - 35f)
-                    2 -> gestureTap(fx, b.bottom - dy + 25f)
+                // Screen fallback from the device screenshot (909x2000): English
+                // at (533,1647) = 58.6% x, 82.4% y; हिंदी at (357,1647).
+                val dm = resources.displayMetrics
+                val sx = dm.widthPixels * (if (hindi) 0.393f else 0.586f)
+                val sy = dm.heightPixels * 0.8235f
+                val boundsOk = b.height() > 300 && b.width() > dm.widthPixels * 0.6f
+                val ok = when (attempt) {
+                    0 -> if (boundsOk) gestureTap(fx, b.bottom - dy) else gestureTap(sx, sy)
+                    1 -> gestureTap(sx, sy)
+                    2 -> if (boundsOk) gestureTap(fx, b.bottom - dy - 35f) else gestureTap(sx, sy - 30f)
                     else -> clickNodeOrAncestor(dlg.node) || (x != null && tapNode(x))
                 }
-                engineStatus(stageStatus(stage, say, " — alert has no language buttons; attempt ${attempt + 1}/4 ${if (ok) "sent" else "failed"}"))
+                engineStatus(stageStatus(stage, say, " — attempt ${attempt + 1}/4 ${if (ok) "sent" else "failed"} box=${b.left},${b.top},${b.right},${b.bottom} scr=${dm.widthPixels}x${dm.heightPixels}"))
                 sleep(800)
                 return if (ok) Res.ACTED else Res.MISSING
             }
