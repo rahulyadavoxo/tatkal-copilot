@@ -51,6 +51,9 @@ class TatkalTapService : AccessibilityService() {
         // or the STOP action on the persistent notification.
         const val PREFS_AUTOMATION = "tatkal_automation"
         const val KEY_AUTOMATION_ENABLED = "automation_enabled"
+        // True while the fast choreography loop is actively running. The
+        // Quick Settings tile reads this to decide tap = start vs tap = stop.
+        const val KEY_SESSION_ACTIVE = "session_active"
         const val ACTION_STOP_AUTOMATION = "com.tatkalcopilot.app.STOP_AUTOMATION"
         const val NOTIF_ID = 4242
         const val KEY_FILL_DATA = "fill_data"
@@ -254,6 +257,8 @@ class TatkalTapService : AccessibilityService() {
      * or after a timeout.
      */
     private fun runChoreographyFast() {
+        setSessionActive(true)
+        try {
         val deadline = System.currentTimeMillis() + 90_000
         while (System.currentTimeMillis() < deadline) {
             // Master kill-switch: halt on the next iteration, no exceptions.
@@ -380,6 +385,16 @@ class TatkalTapService : AccessibilityService() {
             }
         }
         engineStatus("choreography timed out")
+        } finally {
+            setSessionActive(false)
+        }
+    }
+
+    private fun setSessionActive(active: Boolean) {
+        try {
+            getSharedPreferences(PREFS_AUTOMATION, MODE_PRIVATE)
+                .edit().putBoolean(KEY_SESSION_ACTIVE, active).apply()
+        } catch (_: Exception) { }
     }
 
     private fun isStepDone(

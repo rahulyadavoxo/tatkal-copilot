@@ -24,10 +24,12 @@ class TatkalTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
-        // The tile is a proper toggle: tap to arm + start, tap again to
-        // disarm + halt. This is the one-tap kill switch from anywhere.
-        if (isAutomationEnabled()) {
+        // Tap = stop if a booking session is actively running, else tap =
+        // start. This matches what the user expects: nothing happens
+        // silently, every tap does something visible.
+        if (isSessionActive()) {
             setAutomationEnabled(false)
+            setSessionActive(false)
             updateTileState(false)
             return
         }
@@ -67,6 +69,22 @@ class TatkalTileService : TileService() {
                 TatkalTapService.PREFS_AUTOMATION,
                 Context.MODE_PRIVATE
             ).edit().putBoolean(TatkalTapService.KEY_AUTOMATION_ENABLED, on).apply()
+        } catch (_: Exception) { }
+    }
+
+    private fun isSessionActive(): Boolean = try {
+        getSharedPreferences(
+            TatkalTapService.PREFS_AUTOMATION,
+            Context.MODE_PRIVATE
+        ).getBoolean(TatkalTapService.KEY_SESSION_ACTIVE, false)
+    } catch (_: Exception) { false }
+
+    private fun setSessionActive(active: Boolean) {
+        try {
+            getSharedPreferences(
+                TatkalTapService.PREFS_AUTOMATION,
+                Context.MODE_PRIVATE
+            ).edit().putBoolean(TatkalTapService.KEY_SESSION_ACTIVE, active).apply()
         } catch (_: Exception) { }
     }
 

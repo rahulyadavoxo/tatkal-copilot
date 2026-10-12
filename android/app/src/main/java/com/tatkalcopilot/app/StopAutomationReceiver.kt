@@ -17,7 +17,10 @@ class StopAutomationReceiver : BroadcastReceiver() {
             context.getSharedPreferences(
                 TatkalTapService.PREFS_AUTOMATION,
                 Context.MODE_PRIVATE
-            ).edit().putBoolean(TatkalTapService.KEY_AUTOMATION_ENABLED, false).apply()
+            ).edit()
+                .putBoolean(TatkalTapService.KEY_AUTOMATION_ENABLED, false)
+                .putBoolean(TatkalTapService.KEY_SESSION_ACTIVE, false)
+                .apply()
         } catch (_: Exception) { }
         try {
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
