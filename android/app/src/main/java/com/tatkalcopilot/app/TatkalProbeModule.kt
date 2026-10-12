@@ -45,7 +45,11 @@ class TatkalProbeModule(private val reactContext: ReactApplicationContext) :
                 reactContext.contentResolver,
                 Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
             ) ?: ""
-            promise.resolve(enabled.contains("com.tatkalcopilot.app/.TatkalTapService"))
+            // NOTE: the enabled-services string holds the flattened component
+            // name (com.tatkalcopilot.app/com.tatkalcopilot.app.TatkalTapService),
+            // never the manifest shorthand (.TatkalTapService) — match the class
+            // name so detection works on every device.
+            promise.resolve(enabled.contains("TatkalTapService"))
         } catch (e: Exception) {
             promise.reject("ERR", e)
         }
