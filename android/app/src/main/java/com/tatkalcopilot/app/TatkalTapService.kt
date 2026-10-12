@@ -36,6 +36,7 @@ class TatkalTapService : AccessibilityService() {
         const val KEY_CLICKABLE_DUMP = "tap_clickable_dump"
         const val KEY_TAP_TARGET = "probe_tap_target"
         const val KEY_TAP_RESULT = "probe_tap_result"
+        const val KEY_ENGINE_STATUS = "tap_engine_status"
         const val KEY_CHOREO_MAP = "choreo_map"
         const val KEY_FILL_DATA = "fill_data"
         const val CHROME_PKG = "com.android.chrome"
@@ -51,6 +52,19 @@ class TatkalTapService : AccessibilityService() {
 
     private var paymentLockdown = false
     private val donePages = mutableSetOf<String>()
+    // Stuck-step guard: a fill step whose field never appears must not wedge
+    // the whole flow forever. After enough fruitless attempts we skip it so
+    // later steps (especially taps) still run. Keyed by page+step index.
+    private val stepAttempts = mutableMapOf<String, Int>()
+    private val skippedSteps = mutableSetOf<String>()
+    private var lastEngineStatus = "idle"
+
+    private fun engineStatus(s: String) {
+        lastEngineStatus = s
+        try {
+            probePrefs().edit().putString(KEY_ENGINE_STATUS, s).apply()
+        } catch (_: Exception) { }
+    }
 
     private fun securePrefs(): SharedPreferences {
         val masterKey = MasterKey.Builder(this)
@@ -114,13 +128,25 @@ class TatkalTapService : AccessibilityService() {
     // ------------------------------------------------------------------
 
     private fun runChoreography(root: AccessibilityNodeInfo) {
-        if (paymentLockdown) return
+        if (paymentLockdown) {
+            engineStatus("payment lockdown — silent")
+            return
+        }
 
         val screenText = collectText(root).lowercase()
 
-        val prefs = try { securePrefs() } catch (_: Exception) { return }
-        val mapJson = prefs.getString(KEY_CHOREO_MAP, null) ?: return
-        val dataJson = prefs.getString(KEY_FILL_DATA, null) ?: return
+        val prefs = try { securePrefs() } catch (_: Exception) {
+            engineStatus("secure prefs unavailable")
+            return
+        }
+        val mapJson = prefs.getString(KEY_CHOREO_MAP, null) ?: run {
+            engineStatus("no choreography map — did auto-booking sync run?")
+            return
+        }
+        val dataJson = prefs.getString(KEY_FILL_DATA, null) ?: run {
+            engineStatus("no fill data — did auto-booking sync run?")
+            return
+        }
         val map: JSONObject
         val fillData: JSONObject
         try {
@@ -136,26 +162,52 @@ class TatkalTapService : AccessibilityService() {
         }
 
         // 2. Detect the current page.
-        val pages = map.optJSONArray("pages") ?: return
+        val pages = map.optJSONArray("pages") ?: run {
+            engineStatus("map has no pages")
+            return
+        }
+        var sawPage = false
         for (i in 0 until pages.length()) {
             val page = pages.optJSONObject(i) ?: continue
             val pageId = page.optString("id")
             if (pageId.isEmpty() || donePages.contains(pageId)) continue
             val detectAll = jsonStrList(page.optJSONObject("detect")?.optJSONArray("allContains"))
             if (detectAll.isEmpty() || !detectAll.all { screenText.contains(it.lowercase()) }) continue
+            sawPage = true
 
             // 3. Execute the next pending step (one action per event).
             val steps = page.optJSONArray("steps") ?: continue
             var allDone = true
             for (s in 0 until steps.length()) {
                 val step = steps.optJSONObject(s) ?: continue
+                val stepKey = "$pageId:$s"
+                if (skippedSteps.contains(stepKey)) continue
                 if (isStepDone(step, root, fillData)) continue
                 allDone = false
-                executeStep(step, root, fillData)
+                val progressed = executeStep(step, root, fillData)
+                if (!progressed) {
+                    val n = (stepAttempts[stepKey] ?: 0) + 1
+                    stepAttempts[stepKey] = n
+                    if (n >= 15) {
+                        skippedSteps.add(stepKey)
+                        engineStatus("page '$pageId': skipped stuck step $s (${step.optString("do")}) after $n tries")
+                    } else {
+                        engineStatus("page '$pageId': step $s (${step.optString("do")}) no field yet (try $n)")
+                    }
+                } else {
+                    stepAttempts.remove(stepKey)
+                    engineStatus("page '$pageId': did step $s (${step.optString("do")})")
+                }
                 break // one action per event: human-paced
             }
-            if (allDone) donePages.add(pageId)
+            if (allDone) {
+                donePages.add(pageId)
+                engineStatus("page '$pageId' complete")
+            }
             return // one page per event
+        }
+        if (!sawPage) {
+            engineStatus("no page matched (${screenText.length} chars of text seen)")
         }
     }
 
@@ -177,16 +229,17 @@ class TatkalTapService : AccessibilityService() {
         }
     }
 
+    /** Returns true when the step acted (or had nothing to do); false when its target wasn't found. */
     private fun executeStep(
         step: JSONObject,
         root: AccessibilityNodeInfo,
         fillData: JSONObject
-    ) {
+    ): Boolean {
         when (step.optString("do")) {
             "fillField" -> {
                 val value = resolveValue(step.optString("valueKey"), fillData)
-                if (value.isEmpty()) return
-                val field = findField(root, step) ?: return
+                if (value.isEmpty()) return true
+                val field = findField(root, step) ?: return false
                 val current = field.text?.toString() ?: ""
                 if (!current.contains(value)) {
                     // Focus first, then set text (helps web fields accept it).
@@ -197,19 +250,26 @@ class TatkalTapService : AccessibilityService() {
                         value
                     )
                     field.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                    return true
                 } else if (step.optBoolean("pickSuggestion", false)) {
                     // Autocomplete dropdown: tap the suggestion showing our value.
                     val suggestion = findClickableText(root, value)
-                    suggestion?.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    return if (suggestion != null) {
+                        suggestion.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                        true
+                    } else false
                 }
+                return true
             }
             "tap" -> {
                 val label = step.optString("text")
                 if (label.isNotEmpty()) {
-                    tapNodeWithText(root, label)
+                    return tapNodeWithText(root, label)
                 }
+                return true
             }
         }
+        return true
     }
 
     // ------------------------------------------------------------------

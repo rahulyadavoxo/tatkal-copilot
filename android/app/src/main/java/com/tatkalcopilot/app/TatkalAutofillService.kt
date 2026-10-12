@@ -39,6 +39,7 @@ class TatkalAutofillService : AutofillService() {
         const val KEY_LAST_HOST = "autofill_last_host"
         const val KEY_FIELD_MAP = "field_map"
         const val KEY_FILL_DATA = "fill_data"
+        const val KEY_FILL_STATUS = "autofill_status"
 
         private val BROWSER_PACKAGES = setOf(
             "com.android.chrome",
@@ -66,6 +67,12 @@ class TatkalAutofillService : AutofillService() {
     private fun probePrefs(): SharedPreferences =
         getSharedPreferences(PREFS_PROBE, MODE_PRIVATE)
 
+    private fun fillStatus(s: String) {
+        try {
+            probePrefs().edit().putString(KEY_FILL_STATUS, s).apply()
+        } catch (_: Exception) { }
+    }
+
     override fun onFillRequest(
         request: FillRequest,
         cancellationSignal: CancellationSignal,
@@ -80,10 +87,12 @@ class TatkalAutofillService : AutofillService() {
             // Scope gate: real browser + IRCTC domain, or stay silent.
             val pkg = structure.activityComponent?.packageName ?: ""
             if (!BROWSER_PACKAGES.contains(pkg)) {
+                fillStatus("ignored: package $pkg not a known browser")
                 callback.onSuccess(null); return
             }
             val host = findWebDomain(structure) ?: ""
             if (!host.endsWith(IRCTC_DOMAIN)) {
+                fillStatus("ignored: host '$host' not IRCTC")
                 callback.onSuccess(null); return
             }
 
@@ -99,15 +108,22 @@ class TatkalAutofillService : AutofillService() {
             // Load the OTA-updatable field map and the fill data.
             val prefs = securePrefs()
             val mapJson = prefs.getString(KEY_FIELD_MAP, null) ?: run {
+                fillStatus("no field map — did auto-booking sync run?")
                 callback.onSuccess(null); return
             }
             val dataJson = prefs.getString(KEY_FILL_DATA, null) ?: run {
+                fillStatus("no fill data — did auto-booking sync run?")
                 callback.onSuccess(null); return
             }
             val fieldMap = JSONObject(mapJson)
             val fillData = JSONObject(dataJson)
 
             val response = buildFillResponse(structure, fieldMap, fillData, pkg)
+            if (response == null) {
+                fillStatus("no fields matched the map on $host")
+            } else {
+                fillStatus("offered fill suggestions on $host")
+            }
             callback.onSuccess(response)
         } catch (_: Exception) {
             // Never break the autofill flow; worst case we offer nothing.

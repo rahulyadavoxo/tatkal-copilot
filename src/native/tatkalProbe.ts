@@ -24,8 +24,10 @@ export const isProbeAvailable = (): boolean =>
 export interface ProbeReport {
   autofillDump: string;
   autofillHost: string;
+  fillStatus: string;
   tapDump: string;
   tapResult: string;
+  engineStatus: string;
 }
 
 export async function isAutofillServiceEnabled(): Promise<boolean> {

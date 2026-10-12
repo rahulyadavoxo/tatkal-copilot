@@ -193,6 +193,9 @@ export default function ProbeScreen({ nav }: { nav: Nav }) {
       </TouchableOpacity>
 
       <Text style={[styles.label, { marginTop: 12 }]}>Autofill: fields seen in Chrome</Text>
+      {report?.fillStatus ? (
+        <Text style={styles.p}>Status: {report.fillStatus}</Text>
+      ) : null}
       <Text style={styles.mono}>
         {summarizeDump(report?.autofillDump ?? '', 'fields')}
       </Text>
@@ -201,6 +204,10 @@ export default function ProbeScreen({ nav }: { nav: Nav }) {
       <Text style={styles.mono}>
         {summarizeDump(report?.tapDump ?? '', 'nodes')}
       </Text>
+
+      {report?.engineStatus ? (
+        <Text style={styles.p}>Engine: {report.engineStatus}</Text>
+      ) : null}
 
       {report?.tapResult ? (
         <Text style={styles.p}>Last test tap: {report.tapResult}</Text>

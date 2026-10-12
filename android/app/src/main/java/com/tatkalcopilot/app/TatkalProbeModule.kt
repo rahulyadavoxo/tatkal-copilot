@@ -112,8 +112,10 @@ class TatkalProbeModule(private val reactContext: ReactApplicationContext) :
             val o = JSONObject()
             o.put("autofillDump", p.getString(TatkalAutofillService.KEY_FIELD_DUMP, null) ?: "")
             o.put("autofillHost", p.getString(TatkalAutofillService.KEY_LAST_HOST, "") ?: "")
+            o.put("fillStatus", p.getString(TatkalAutofillService.KEY_FILL_STATUS, "") ?: "")
             o.put("tapDump", p.getString(TatkalTapService.KEY_CLICKABLE_DUMP, null) ?: "")
             o.put("tapResult", p.getString(TatkalTapService.KEY_TAP_RESULT, "") ?: "")
+            o.put("engineStatus", p.getString(TatkalTapService.KEY_ENGINE_STATUS, "") ?: "")
             promise.resolve(o.toString())
         } catch (e: Exception) {
             promise.reject("ERR", e)
