@@ -54,6 +54,9 @@ class TatkalTapService : AccessibilityService() {
         // True while the fast choreography loop is actively running. The
         // Quick Settings tile reads this to decide tap = start vs tap = stop.
         const val KEY_SESSION_ACTIVE = "session_active"
+        // Heartbeat (epoch ms) written by the running loop; the tile treats
+        // a run as live only while this is fresh.
+        const val KEY_SESSION_TS = "session_ts"
         const val ACTION_STOP_AUTOMATION = "com.tatkalcopilot.app.STOP_AUTOMATION"
         const val NOTIF_ID = 4242
         const val KEY_FILL_DATA = "fill_data"
@@ -99,6 +102,8 @@ class TatkalTapService : AccessibilityService() {
     // Autocomplete steps (pickSuggestion): the suggestion tap is a separate
     // phase — setting the text alone must NOT count as done.
     private val suggestionPicked = Collections.synchronizedSet(mutableSetOf<String>())
+    // Password fields read back as bullets, so "filled" is tracked here.
+    private val passwordFilled = Collections.synchronizedSet(mutableSetOf<String>())
     private var lastEngineStatus = "idle"
 
     private fun engineStatus(s: String) {
@@ -180,6 +185,8 @@ class TatkalTapService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         val pkg = event.packageName?.toString() ?: return
+        // The notification shade / Quick Settings is not "leaving the browser".
+        if (pkg == "com.android.systemui") return
         if (!BROWSER_PACKAGES.contains(pkg)) {
             // Left the browser: reset the session state.
             paymentLockdown = false
@@ -187,6 +194,7 @@ class TatkalTapService : AccessibilityService() {
             doneSteps.clear()
             skippedSteps.clear()
             suggestionPicked.clear()
+            passwordFilled.clear()
             stepAttempts.clear()
             return
         }
@@ -260,7 +268,10 @@ class TatkalTapService : AccessibilityService() {
         setSessionActive(true)
         try {
         val deadline = System.currentTimeMillis() + 90_000
+        var lastBeat = 0L
         while (System.currentTimeMillis() < deadline) {
+            val now = System.currentTimeMillis()
+            if (now - lastBeat > 3_000L) { setSessionActive(true); lastBeat = now }
             // Master kill-switch: halt on the next iteration, no exceptions.
             if (!isAutomationEnabled()) {
                 engineStatus("automation stopped by user")
@@ -277,6 +288,13 @@ class TatkalTapService : AccessibilityService() {
                 continue
             }
             val pkg = try { root.packageName?.toString() } catch (_: Exception) { null }
+            if (pkg == "com.android.systemui") {
+                // Notification shade / Quick Settings pulled down (e.g. to
+                // tap the tile and stop): keep the run alive, just wait.
+                try { root.recycle() } catch (_: Exception) { }
+                Thread.sleep(500)
+                continue
+            }
             if (pkg == null || !BROWSER_PACKAGES.contains(pkg)) {
                 try { root.recycle() } catch (_: Exception) { }
                 return // user left the browser
@@ -345,10 +363,10 @@ class TatkalTapService : AccessibilityService() {
                         if (progressed) {
                             acted = true
                             stepAttempts.remove(stepKey)
-                            if (step.optString("do") == "tap") {
+                            if (step.optString("do") == "tap" || step.optString("do") == "tapLogin") {
                                 // One-shot: a tap is done the moment it fires.
                                 doneSteps.add(stepKey)
-                                engineStatus("page '$pageId': tapped '${step.optString("text")}'")
+                                engineStatus("page '$pageId': tapped '${step.optString("do")}:${step.optString("text")}'")
                             } else {
                                 engineStatus("page '$pageId': did step $s (${step.optString("do")})")
                             }
@@ -390,7 +408,10 @@ class TatkalTapService : AccessibilityService() {
     private fun setSessionActive(active: Boolean) {
         try {
             getSharedPreferences(PREFS_AUTOMATION, MODE_PRIVATE)
-                .edit().putBoolean(KEY_SESSION_ACTIVE, active).apply()
+                .edit()
+                .putBoolean(KEY_SESSION_ACTIVE, active)
+                .putLong(KEY_SESSION_TS, if (active) System.currentTimeMillis() else 0L)
+                .apply()
         } catch (_: Exception) { }
     }
 
@@ -409,10 +430,11 @@ class TatkalTapService : AccessibilityService() {
                     !suggestionPicked.contains(stepKey)
                 ) return false
                 val field = findField(root, step) ?: return false
+                if (field.isPassword) return passwordFilled.contains(stepKey)
                 val current = field.text?.toString() ?: ""
                 current.contains(value)
             }
-            "tap" -> false // taps are one-shot; engine tracks via donePages
+            "tap", "tapLogin" -> false // taps are one-shot; engine tracks via doneSteps
             else -> true
         }
     }
@@ -429,6 +451,18 @@ class TatkalTapService : AccessibilityService() {
                 val value = resolveValue(step.optString("valueKey"), fillData)
                 if (value.isEmpty()) return true
                 val field = findField(root, step) ?: return false
+                if (field.isPassword) {
+                    if (passwordFilled.contains(stepKey)) return true
+                    field.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                    val pargs = Bundle()
+                    pargs.putCharSequence(
+                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                        value
+                    )
+                    val ok = field.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, pargs)
+                    if (ok) passwordFilled.add(stepKey)
+                    return ok
+                }
                 val current = field.text?.toString() ?: ""
                 if (!current.contains(value)) {
                     // Focus first, then set text (helps web fields accept it).
@@ -455,14 +489,88 @@ class TatkalTapService : AccessibilityService() {
                 return true
             }
             "tap" -> {
-                val label = step.optString("text")
+                // textKey lets the label come from fill data (e.g. the
+                // user's saved IRCTC language); text is the fallback.
+                val fromData = resolveValue(step.optString("textKey"), fillData)
+                val label = if (fromData.isNotEmpty()) fromData else step.optString("text")
                 if (label.isNotEmpty()) {
                     return tapNodeWithText(root, label)
                 }
                 return true
             }
+            "tapLogin" -> {
+                val tapped = tapLoginEntry(root)
+                if (tapped) {
+                    // Give the login form time to open before the next pass.
+                    try { Thread.sleep(1500) } catch (_: Exception) { }
+                }
+                return tapped
+            }
         }
         return true
+    }
+
+    /**
+     * Opens IRCTC's login form. Skips (returns true) when already logged in.
+     * Tries, in order: a node whose text is LOGIN / Sign In; a node whose
+     * description mentions login/user/person/account/profile; finally the
+     * top-right-most clickable in the page's top strip (IRCTC mobile shows
+     * an icon-only person glyph there).
+     */
+    private fun tapLoginEntry(root: AccessibilityNodeInfo): Boolean {
+        val text = try { collectText(root).lowercase() } catch (_: Exception) { "" }
+        if (text.contains("logout") || text.contains("log out")) return true
+        for (label in listOf("LOGIN", "Login", "Sign In", "SIGN IN")) {
+            val n = findNode(root) { node ->
+                (node.text?.toString()?.trim()?.equals(label, ignoreCase = true) == true)
+            }
+            if (n != null && clickNodeOrAncestor(n)) return true
+        }
+        val byDesc = findNode(root) { node ->
+            val d = (node.contentDescription?.toString() ?: "").lowercase()
+            d.isNotEmpty() && Regex("log\\s?in|sign\\s?in|user|person|account|profile").containsMatchIn(d)
+        }
+        if (byDesc != null && clickNodeOrAncestor(byDesc)) return true
+        // Positional fallback: top strip of the web content, rightmost first.
+        val rootRect = android.graphics.Rect()
+        root.getBoundsInScreen(rootRect)
+        val candidates = mutableListOf<Pair<AccessibilityNodeInfo, android.graphics.Rect>>()
+        val webTop = webContentTop(root) ?: rootRect.top
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.add(root)
+        while (stack.isNotEmpty()) {
+            val node = stack.removeLast()
+            val cls = node.className?.toString() ?: ""
+            if (node.isClickable && !node.isEditable && cls != "android.widget.EditText") {
+                val r = android.graphics.Rect()
+                node.getBoundsInScreen(r)
+                if (r.width() > 0 && r.top >= webTop && r.top < webTop + 220 &&
+                    r.right > rootRect.right - 220
+                ) candidates.add(node to r)
+            }
+            for (i in 0 until node.childCount) node.getChild(i)?.let { stack.add(it) }
+        }
+        val best = candidates.maxByOrNull { it.second.right } ?: return false
+        return best.first.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+    }
+
+    /** Top edge of Chrome's web content (below the address bar), when exposed. */
+    private fun webContentTop(root: AccessibilityNodeInfo): Int? {
+        val web = findNode(root) { it.className?.toString() == "android.webkit.WebView" } ?: return null
+        val r = android.graphics.Rect()
+        web.getBoundsInScreen(r)
+        return r.top
+    }
+
+    private fun clickNodeOrAncestor(start: AccessibilityNodeInfo): Boolean {
+        var node: AccessibilityNodeInfo? = start
+        var depth = 0
+        while (node != null && depth < 6) {
+            if (node.isClickable) return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+            node = node.parent
+            depth++
+        }
+        return false
     }
 
     // ------------------------------------------------------------------
@@ -485,14 +593,27 @@ class TatkalTapService : AccessibilityService() {
             return editables.getOrNull(idx)
         }
         val labels = jsonStrList(step.optJSONArray("labelContains")).map { it.lowercase() }
-        if (labels.isEmpty()) return null
-        return findNode(root) { node ->
-            if (!node.isEditable) return@findNode false
-            val text = (node.text?.toString() ?: "").lowercase()
-            val desc = (node.contentDescription?.toString() ?: "").lowercase()
-            val hint = node.hintText?.toString()?.lowercase() ?: ""
-            labels.any { text.contains(it) || desc.contains(it) || hint.contains(it) }
+        if (labels.isNotEmpty()) {
+            val byLabel = findNode(root) { node ->
+                if (!node.isEditable) return@findNode false
+                val text = (node.text?.toString() ?: "").lowercase()
+                val desc = (node.contentDescription?.toString() ?: "").lowercase()
+                val hint = node.hintText?.toString()?.lowercase() ?: ""
+                labels.any { text.contains(it) || desc.contains(it) || hint.contains(it) }
+            }
+            if (byLabel != null) return byLabel
         }
+        // Fallbacks for unlabeled login inputs: the password box, and the
+        // editable field just before it (the username).
+        if (step.optBoolean("passwordField", false) || step.optBoolean("loginUser", false)) {
+            val editables = mutableListOf<AccessibilityNodeInfo>()
+            collectEditables(root, editables)
+            val pwIdx = editables.indexOfFirst { it.isPassword }
+            if (pwIdx < 0) return null
+            return if (step.optBoolean("passwordField", false)) editables[pwIdx]
+            else editables.getOrNull(pwIdx - 1)
+        }
+        return null
     }
 
     private fun collectEditables(node: AccessibilityNodeInfo, out: MutableList<AccessibilityNodeInfo>) {
@@ -555,6 +676,8 @@ class TatkalTapService : AccessibilityService() {
      */
     private fun pageMatches(detect: JSONObject?, screenText: String): Boolean {
         if (detect == null) return false
+        val none = jsonStrList(detect.optJSONArray("noneContains"))
+        if (none.any { screenText.contains(it.lowercase()) }) return false
         val anyOf = detect.optJSONArray("anyOf")
         if (anyOf != null && anyOf.length() > 0) {
             for (i in 0 until anyOf.length()) {
