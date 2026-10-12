@@ -171,7 +171,7 @@ export async function syncLatestAutomationData(): Promise<boolean> {
       sorted.find((t) => t.journeyDate >= today) ?? sorted[sorted.length - 1];
     let fill: Record<string, string> = { 'site.language': siteLanguage };
     if (trip) {
-      fill = { ...buildFillData(trip, passengers, creds), 'site.language': siteLanguage };
+      fill = buildFillData(trip, passengers, creds, { language: prefs.language });
     } else {
       if (creds?.username) fill['irctc.username'] = creds.username;
       if (creds?.password) fill['irctc.password'] = creds.password;
@@ -198,13 +198,12 @@ export async function syncAutofillData(tripId: string): Promise<boolean> {
       loadIrctcCredentials(),
       loadPrefs(),
     ]);
-    const siteLanguage = prefs.language === 'hi' ? 'हिंदी' : 'English';
     const trip = trips.find((t) => t.id === tripId);
     if (!trip) return false;
     return await writeAutofillData(
       JSON.stringify(DEFAULT_FIELD_MAP),
       JSON.stringify(DEFAULT_CHOREO_MAP),
-      JSON.stringify({ ...buildFillData(trip, passengers, creds), 'site.language': siteLanguage }),
+      JSON.stringify(buildFillData(trip, passengers, creds, { language: prefs.language })),
     );
   } catch {
     return false;
