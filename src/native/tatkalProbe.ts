@@ -155,21 +155,23 @@ export async function setAutomationEnabled(on: boolean): Promise<void> {
 export async function syncLatestAutomationData(): Promise<boolean> {
   try {
     if (Platform.OS !== 'android' || !M?.writeAutofillData) return false;
-    const { loadPassengers, loadTrips, loadIrctcCredentials } = await import('../vaultStore');
+    const { loadPassengers, loadTrips, loadIrctcCredentials, loadPrefs } = await import('../vaultStore');
     const { buildFillData, DEFAULT_CHOREO_MAP, DEFAULT_FIELD_MAP } =
       await import('./autofillData');
-    const [trips, passengers, creds] = await Promise.all([
+    const [trips, passengers, creds, prefs] = await Promise.all([
       loadTrips(),
       loadPassengers(),
       loadIrctcCredentials(),
+      loadPrefs(),
     ]);
+    const siteLanguage = prefs.language === 'hi' ? 'हिंदी' : 'English';
     const today = new Date().toISOString().slice(0, 10);
     const sorted = [...trips].sort((a, b) => a.journeyDate.localeCompare(b.journeyDate));
     const trip =
       sorted.find((t) => t.journeyDate >= today) ?? sorted[sorted.length - 1];
-    let fill: Record<string, string> = {};
+    let fill: Record<string, string> = { 'site.language': siteLanguage };
     if (trip) {
-      fill = buildFillData(trip, passengers, creds);
+      fill = { ...buildFillData(trip, passengers, creds), 'site.language': siteLanguage };
     } else {
       if (creds?.username) fill['irctc.username'] = creds.username;
       if (creds?.password) fill['irctc.password'] = creds.password;
@@ -187,20 +189,22 @@ export async function syncLatestAutomationData(): Promise<boolean> {
 export async function syncAutofillData(tripId: string): Promise<boolean> {
   try {
     if (Platform.OS !== 'android' || !M?.writeAutofillData) return false;
-    const { loadPassengers, loadTrips, loadIrctcCredentials } = await import('../vaultStore');
+    const { loadPassengers, loadTrips, loadIrctcCredentials, loadPrefs } = await import('../vaultStore');
     const { buildFillData, DEFAULT_CHOREO_MAP, DEFAULT_FIELD_MAP } =
       await import('./autofillData');
-    const [trips, passengers, creds] = await Promise.all([
+    const [trips, passengers, creds, prefs] = await Promise.all([
       loadTrips(),
       loadPassengers(),
       loadIrctcCredentials(),
+      loadPrefs(),
     ]);
+    const siteLanguage = prefs.language === 'hi' ? 'हिंदी' : 'English';
     const trip = trips.find((t) => t.id === tripId);
     if (!trip) return false;
     return await writeAutofillData(
       JSON.stringify(DEFAULT_FIELD_MAP),
       JSON.stringify(DEFAULT_CHOREO_MAP),
-      JSON.stringify(buildFillData(trip, passengers, creds)),
+      JSON.stringify({ ...buildFillData(trip, passengers, creds), 'site.language': siteLanguage }),
     );
   } catch {
     return false;
