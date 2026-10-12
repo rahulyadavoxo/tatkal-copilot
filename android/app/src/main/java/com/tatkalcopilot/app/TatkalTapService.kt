@@ -294,11 +294,9 @@ class TatkalTapService : AccessibilityService() {
                 try { root.recycle() } catch (_: Exception) { }
                 return
             }
-            val dataJson = prefs.getString(KEY_FILL_DATA, null) ?: run {
-                engineStatus("no fill data — did auto-booking sync run?")
-                try { root.recycle() } catch (_: Exception) { }
-                return
-            }
+            // Fill data is optional: without a trip the language and login
+            // steps must still run, so fall back to an empty object.
+            val dataJson = prefs.getString(KEY_FILL_DATA, null) ?: "{}"
             val map: JSONObject
             val fillData: JSONObject
             try {
@@ -327,8 +325,7 @@ class TatkalTapService : AccessibilityService() {
                     val page = pages.optJSONObject(i) ?: continue
                     val pageId = page.optString("id")
                     if (pageId.isEmpty() || donePages.contains(pageId)) continue
-                    val detectAll = jsonStrList(page.optJSONObject("detect")?.optJSONArray("allContains"))
-                    if (detectAll.isEmpty() || !detectAll.all { screenText.contains(it.lowercase()) }) continue
+                    if (!pageMatches(page.optJSONObject("detect"), screenText)) continue
                     pageFound = true
 
                     val steps = page.optJSONArray("steps") ?: break
@@ -550,6 +547,24 @@ class TatkalTapService : AccessibilityService() {
     private fun resolveValue(valueKey: String, fillData: JSONObject): String {
         if (valueKey.isEmpty()) return ""
         return fillData.optString(valueKey, "")
+    }
+
+    /**
+     * A page matches when every string in detect.allContains is on screen,
+     * or (when detect.anyOf is given) every string of ANY one of its lists.
+     */
+    private fun pageMatches(detect: JSONObject?, screenText: String): Boolean {
+        if (detect == null) return false
+        val anyOf = detect.optJSONArray("anyOf")
+        if (anyOf != null && anyOf.length() > 0) {
+            for (i in 0 until anyOf.length()) {
+                val group = jsonStrList(anyOf.optJSONArray(i))
+                if (group.isNotEmpty() && group.all { screenText.contains(it.lowercase()) }) return true
+            }
+            return false
+        }
+        val all = jsonStrList(detect.optJSONArray("allContains"))
+        return all.isNotEmpty() && all.all { screenText.contains(it.lowercase()) }
     }
 
     private fun jsonStrList(arr: JSONArray?): List<String> {
