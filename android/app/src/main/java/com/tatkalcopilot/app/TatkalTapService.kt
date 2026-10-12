@@ -128,8 +128,8 @@ class TatkalTapService : AccessibilityService() {
         getSharedPreferences(PREFS_AUTOMATION, MODE_PRIVATE)
 
     private fun isAutomationEnabled(): Boolean = try {
-        automationPrefs().getBoolean(KEY_AUTOMATION_ENABLED, true)
-    } catch (_: Exception) { true }
+        automationPrefs().getBoolean(KEY_AUTOMATION_ENABLED, false)
+    } catch (_: Exception) { false }
 
     /** Persistent notification with a STOP action — the instant kill-switch. */
     private fun showStopNotification() {
