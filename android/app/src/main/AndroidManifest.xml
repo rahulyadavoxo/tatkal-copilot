@@ -37,5 +37,14 @@
         <action android:name="com.tatkalcopilot.app.STOP_AUTOMATION"/>
       </intent-filter>
     </receiver>
+    <service android:name=".TatkalTileService"
+        android:label="Tatkal auto-book"
+        android:icon="@mipmap/ic_launcher"
+        android:permission="android.permission.BIND_QUICK_SETTINGS_TILE"
+        android:exported="true">
+      <intent-filter>
+        <action android:name="android.service.quicksettings.action.QS_TILE"/>
+      </intent-filter>
+    </service>
   </application>
 </manifest>
