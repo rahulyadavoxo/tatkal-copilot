@@ -759,7 +759,10 @@ class TatkalTapService : AccessibilityService() {
 
     private fun stepFillField(key: String, step: JSONObject, data: JSONObject): Res {
         val value = resolveValue(step.optString("valueKey"), data)
-        if (value.isEmpty()) return Res.DONE
+        if (value.isEmpty()) {
+            if (step.optString("valueKey").startsWith("irctc.")) engineStatus("Login: no saved IRCTC ${if (step.optBoolean("passwordField")) "password" else "user name"} in the app — fill it by hand")
+            return Res.DONE
+        }
         val field = findField(step) ?: return Res.MISSING
         if (field.node.isPassword) {
             if (passwordFilled.contains(key)) return Res.DONE
@@ -1542,6 +1545,7 @@ class TatkalTapService : AccessibilityService() {
         if (detect == null) return false
         val none = jsonStrList(detect.optJSONArray("noneContains"))
         if (none.any { screenText.contains(it.lowercase()) }) return false
+        if (detect.optBoolean("passwordNode", false) && snap.any { it.editable && it.node.isPassword }) return true
         val anyOf = detect.optJSONArray("anyOf")
         if (anyOf != null && anyOf.length() > 0) {
             for (i in 0 until anyOf.length()) {

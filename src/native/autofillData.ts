@@ -201,6 +201,9 @@ export const DEFAULT_CHOREO_MAP = {
       stage: 1,
       detect: {
         anyOf: [['user name', 'password'], ['username', 'password'], ['captcha', 'password']],
+        // Device 2026-10-13: IRCTC's login inputs expose no labels in Chrome,
+        // so the form is also recognised by its password box.
+        passwordNode: true,
       },
       steps: [
         { do: 'fillField', labelContains: ['user name', 'username', 'login id'], loginUser: true, valueKey: 'irctc.username', say: 'filling your user name' },
