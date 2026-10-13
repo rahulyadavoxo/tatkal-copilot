@@ -634,6 +634,16 @@ class TatkalTapService : AccessibilityService() {
                 val sx = dm.widthPixels * (if (hindi) 0.393f else 0.586f)
                 val sy = dm.heightPixels * 0.8235f
                 val boundsOk = b.height() > 300 && b.width() > dm.widthPixels * 0.6f
+                // Device-independent first: look at the screen and tap the
+                // orange button itself (pair side by side: left हिंदी, right English).
+                val seen = findLanguageButtons()
+                if (seen != null) {
+                    val r = if (hindi) seen.first else seen.second
+                    val ok2 = gestureTap(r.exactCenterX(), r.exactCenterY())
+                    engineStatus(stageStatus(stage, say, " — saw buttons on screen, tapped ${if (hindi) "हिंदी" else "English"} at ${r.centerX()},${r.centerY()} ${if (ok2) "sent" else "failed"}"))
+                    sleep(800)
+                    if (ok2) return Res.ACTED
+                }
                 val ok = when (attempt) {
                     0 -> if (boundsOk) gestureTap(fx, b.bottom - dy) else gestureTap(sx, sy)
                     1 -> gestureTap(sx, sy)
@@ -1594,6 +1604,73 @@ class TatkalTapService : AccessibilityService() {
         val ime = imeRect
         if (ime != null && ime.contains(cx, cy)) return false
         return true
+    }
+
+    /** Screenshot (API 30+) and find the language alert's two orange buttons.
+     *  Returns (left, right) in screen pixels, or null. Runs on the engine thread. */
+    private fun findLanguageButtons(): Pair<Rect, Rect>? {
+        if (Build.VERSION.SDK_INT < 30) return null
+        return try {
+            val latch = CountDownLatch(1)
+            var bmp: android.graphics.Bitmap? = null
+            takeScreenshot(android.view.Display.DEFAULT_DISPLAY, mainExecutor,
+                object : AccessibilityService.TakeScreenshotCallback {
+                    override fun onSuccess(res: AccessibilityService.ScreenshotResult) {
+                        try {
+                            val hb = res.hardwareBuffer
+                            val hw = android.graphics.Bitmap.wrapHardwareBuffer(hb, res.colorSpace)
+                            bmp = hw?.copy(android.graphics.Bitmap.Config.ARGB_8888, false)
+                            hb.close()
+                        } catch (_: Throwable) { }
+                        latch.countDown()
+                    }
+                    override fun onFailure(code: Int) { latch.countDown() }
+                })
+            latch.await(2, TimeUnit.SECONDS)
+            val b = bmp ?: return null
+            val w = b.width; val h = b.height
+            val px = IntArray(w * h); b.getPixels(px, 0, w, 0, 0, w, h); b.recycle()
+            val st = 3
+            val gw = w / st; val gh = h / st
+            val mark = BooleanArray(gw * gh)
+            for (gy in (gh * 15 / 100) until (gh * 97 / 100)) for (gx in 0 until gw) {
+                val c = px[(gy * st) * w + gx * st]
+                val r = (c shr 16) and 255; val g = (c shr 8) and 255; val bl = c and 255
+                if (r > 200 && g in 80..185 && bl < 120 && r - bl > 120 && r - g > 45) mark[gy * gw + gx] = true
+            }
+            val seenArr = BooleanArray(gw * gh)
+            val blobs = ArrayList<Rect>()
+            val q = IntArray(gw * gh)
+            for (i in mark.indices) {
+                if (!mark[i] || seenArr[i]) continue
+                var head = 0; var tail = 0; q[tail++] = i; seenArr[i] = true
+                var x0 = gw; var y0 = gh; var x1 = 0; var y1 = 0; var n = 0
+                while (head < tail) {
+                    val k = q[head++]; val kx = k % gw; val ky = k / gw; n++
+                    if (kx < x0) x0 = kx; if (kx > x1) x1 = kx; if (ky < y0) y0 = ky; if (ky > y1) y1 = ky
+                    for (d in intArrayOf(-1, 1, -gw, gw)) {
+                        val j = k + d
+                        if (j < 0 || j >= mark.size) continue
+                        if ((d == -1 && kx == 0) || (d == 1 && kx == gw - 1)) continue
+                        if (mark[j] && !seenArr[j]) { seenArr[j] = true; q[tail++] = j }
+                    }
+                }
+                val r = Rect(x0 * st, y0 * st, (x1 + 1) * st, (y1 + 1) * st)
+                val fill = n.toFloat() / ((x1 - x0 + 1) * (y1 - y0 + 1))
+                if (r.width() >= w * 0.06f && r.height() >= h * 0.018f && r.height() <= h * 0.09f &&
+                    r.width() <= w * 0.5f && fill > 0.5f) blobs.add(r)
+            }
+            var best: Pair<Rect, Rect>? = null
+            for (i in blobs.indices) for (j in blobs.indices) {
+                if (i == j) continue
+                val l = blobs[i]; val rr = blobs[j]
+                if (l.centerX() >= rr.centerX()) continue
+                if (Math.abs(l.centerY() - rr.centerY()) > l.height() / 2) continue
+                if (rr.left - l.right > w * 0.2f) continue
+                if (best == null || l.centerY() > best.first.centerY()) best = Pair(l, rr)
+            }
+            best
+        } catch (_: Throwable) { null }
     }
 
     private fun gestureTap(x: Float, y: Float): Boolean {
