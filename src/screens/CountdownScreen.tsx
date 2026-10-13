@@ -11,13 +11,17 @@
  *   early so the user can log in to IRCTC ahead of time.
  * - At/after open: big FIRE button enables → opens Booking for the fill.
  *
- * The FIRE button enables EXACTLY at the computed open instant — no 60s
- * early-enable. Rationale: IRCTC's Tatkal form only goes live at :00 sharp;
+ * The FIRE button enables 2 minutes before the open instant (user request
+ * 2026-10-13: open the IRCTC tab before the window). Previously it enabled
+ * exactly at the open instant. Rationale: IRCTC's Tatkal form only goes live at :00 sharp;
  * firing early burns the one-shot paced fill against a dead form, and
  * clock-skew guessing adds risk without benefit. If the phone clock is off,
  * the user still sees the live IRCTC page and taps Fill themselves.
  */
 import React, { useEffect, useMemo, useState } from 'react';
+
+/** FIRE enables this long before the window opens (user request 2026-10-13). */
+export const FIRE_EARLY_MS = 2 * 60_000;
 import { Text, View } from 'react-native';
 import { useTheme } from '../theme';
 import {
@@ -231,6 +235,9 @@ export default function CountdownScreen({ nav, tripId }: { nav: Nav; tripId: str
   const isOpen = msLeft <= 0;
   const missed = msLeft < -MISSED_AFTER_MS;
   const showWarmup = !isOpen && msLeft <= WARMUP_MS;
+  // User request 2026-10-13: FIRE enables 2 minutes early (9:58 for AC) so
+  // the IRCTC tab can be opened and ready before the window.
+  const fireEnabled = msLeft <= FIRE_EARLY_MS;
 
   // Window-state copy for the countdown's state line.
   const windowState: 'far' | 'soon' | 'final' | 'open' =
@@ -300,20 +307,20 @@ export default function CountdownScreen({ nav, tripId }: { nav: Nav; tripId: str
         )}
 
         <PrimaryButton
-          title={isOpen ? 'FIRE — open IRCTC booking' : 'FIRE (enables at window open)'}
+          title={fireEnabled ? 'FIRE — open IRCTC booking' : 'FIRE (enables 2 min before window)'}
           icon="ticket"
           size="lg"
           fullWidth
-          disabled={!isOpen}
+          disabled={!fireEnabled}
           accessibilityLabel={
-            isOpen
+            fireEnabled
               ? 'Fire — open IRCTC booking'
-              : 'Fire — disabled until the Tatkal window opens'
+              : 'Fire — disabled until 2 minutes before the Tatkal window'
           }
           onPress={() => nav.go({ name: 'booking', tripId })}
           style={{ marginTop: showWarmup && !missed ? 0 : theme.spacing.sm }}
         />
-        {!isOpen && !missed && (
+        {!fireEnabled && !missed && (
           <Text
             style={{
               color: theme.colors.muted,
@@ -322,8 +329,8 @@ export default function CountdownScreen({ nav, tripId }: { nav: Nav; tripId: str
               marginTop: theme.spacing.sm,
             }}
           >
-            FIRE enables exactly at {istString(open)} IST — no early fire; the
-            Tatkal form only goes live at :00.
+            FIRE enables 2 minutes before {istString(open)} IST so you can open
+            IRCTC early; the Tatkal form itself goes live at :00.
           </Text>
         )}
 
