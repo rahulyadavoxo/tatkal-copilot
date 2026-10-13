@@ -1245,15 +1245,25 @@ class TatkalTapService : AccessibilityService() {
             engineStatus(stageStatus(stage, say))
             return Res.WAIT
         }
-        if (taps[key] != null) {
-            engineStatus(stageStatus(stage, "signing in", " — waiting for IRCTC"))
-            return Res.WAIT
+        // Device 2026-10-13 (build-53): the fill was instant but the SIGN IN
+        // tap was lost — the keyboard opened by the fill moves the button, so
+        // the old bounds missed. Click the node itself (position-free), and if
+        // the form is still up shortly after, tap it again at fresh bounds.
+        val rec = taps[key]
+        val btn = snap.firstOrNull { Regex("^sign\\s?in$").matches(it.lower) }
+        if (rec != null) {
+            val since = System.currentTimeMillis() - rec.lastTs
+            if (btn == null || rec.count >= 5 || since < 450L) {
+                engineStatus(stageStatus(stage, "signing in", " — waiting for IRCTC"))
+                return Res.WAIT
+            }
         }
-        val btn = snap.firstOrNull { Regex("^sign\\s?in$").matches(it.lower) } ?: return Res.MISSING
-        if (!tapNode(btn)) return Res.MISSING
-        taps[key] = TapRec(1, System.currentTimeMillis())
+        if (btn == null) return Res.MISSING
+        val n = (rec?.count ?: 0) + 1
+        val ok = if (n % 2 == 1) clickNodeOrAncestor(btn.node) || tapNode(btn) else tapNode(btn)
+        taps[key] = TapRec(n, System.currentTimeMillis())
         val ms = if (loginSeenTs > 0) System.currentTimeMillis() - loginSeenTs else -1
-        engineStatus(stageStatus(stage, say, " — login filled + SIGN IN in ${ms} ms"))
+        engineStatus(stageStatus(stage, say, " — SIGN IN try $n ${if (ok) "sent" else "failed"}, ${ms} ms after the form opened"))
         return Res.ACTED
     }
 
