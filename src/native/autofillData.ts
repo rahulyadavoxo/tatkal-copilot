@@ -206,8 +206,8 @@ export const DEFAULT_CHOREO_MAP = {
         passwordNode: true,
       },
       steps: [
-        { do: 'fillField', labelContains: ['user name', 'username', 'login id'], loginUser: true, valueKey: 'irctc.username', say: 'filling your user name' },
-        { do: 'fillField', labelContains: ['password'], passwordField: true, valueKey: 'irctc.password', say: 'filling your password' },
+        { do: 'fillField', labelContains: ['user name', 'username', 'login id'], loginUser: true, trustSet: true, chain: true, valueKey: 'irctc.username', say: 'filling your user name' },
+        { do: 'fillField', labelContains: ['password'], passwordField: true, chain: true, valueKey: 'irctc.password', say: 'filling your password' },
         { do: 'submitLogin', text: 'SIGN IN', say: 'tapping SIGN IN' },
       ],
     },

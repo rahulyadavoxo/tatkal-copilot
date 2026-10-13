@@ -153,6 +153,7 @@ class TatkalTapService : AccessibilityService() {
 
     private fun clearRunMemory() {
         paymentLockdown = false
+        loginSeenTs = 0L
         donePages.clear()
         doneSteps.clear()
         skippedSteps.clear()
@@ -464,7 +465,10 @@ class TatkalTapService : AccessibilityService() {
                         if (!detectMatches(page.optJSONObject("detect"))) continue
                         pageFound = true
                         if (page.optInt("stage", 1) >= 5) stepFlags["payment:reached"] = 1
-                        if (pageId == "login") stepFlags["login:seen"] = 1
+                        if (pageId == "login") {
+                            stepFlags["login:seen"] = 1
+                            if (loginSeenTs == 0L) loginSeenTs = System.currentTimeMillis()
+                        }
                         val outcome = runPage(page, pageId, fillData)
                         acted = outcome == Res.ACTED || outcome == Res.ACTED_DONE
                         waiting = outcome == Res.WAIT
@@ -532,6 +536,7 @@ class TatkalTapService : AccessibilityService() {
                         return r
                     }
                     engineStatus(stageStatus(stage, say))
+                    if (step.optBoolean("chain", false) && r == Res.ACTED_DONE) continue
                     val settle = step.optLong("settleMs", 200L).coerceIn(120L, 600L)
                     try { Thread.sleep(settle) } catch (_: Exception) { }
                     return r
@@ -643,6 +648,11 @@ class TatkalTapService : AccessibilityService() {
                     engineStatus(stageStatus(stage, say, " — saw buttons on screen, tapped ${if (hindi) "हिंदी" else "English"} at ${r.centerX()},${r.centerY()} ${if (ok2) "sent" else "failed"}"))
                     sleep(800)
                     if (ok2) return Res.ACTED
+                } else if (Build.VERSION.SDK_INT >= 30 && rec.count <= 2) {
+                    // Screenshots are rate-limited (~1/s): look again rather
+                    // than tapping blind spots on the page.
+                    engineStatus(stageStatus(stage, say, " — looking at the screen"))
+                    return Res.MISSING
                 }
                 val ok = when (attempt) {
                     0 -> if (boundsOk) gestureTap(fx, b.bottom - dy) else gestureTap(sx, sy)
@@ -730,6 +740,8 @@ class TatkalTapService : AccessibilityService() {
     }
 
     /** prebookEngine stepOpenLogin. Skips when logged in or the form is open. */
+    private var loginSeenTs = 0L
+
     private fun stepTapLogin(key: String): Res {
         if (screenText.contains("logout") || screenText.contains("log out") || screenText.contains("sign out")) return Res.DONE
         if (stepFlags["login:seen"] == 1) return Res.DONE // the user logged in during this run
@@ -745,7 +757,6 @@ class TatkalTapService : AccessibilityService() {
             ?: return Res.DONE
         if (!tapNode(target)) return Res.MISSING
         taps[key] = TapRec(1, System.currentTimeMillis())
-        sleep(1200)
         return Res.ACTED_DONE
     }
 
@@ -777,8 +788,8 @@ class TatkalTapService : AccessibilityService() {
         stepFlags[key] = n
         if (n > 4) return Res.MISSING
         field.node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-        setText(field, value)
-        return Res.ACTED
+        val set = setText(field, value)
+        return if (set && step.optBoolean("trustSet", false)) Res.ACTED_DONE else Res.ACTED
     }
 
     /** prebookEngine setAutocomplete: type the code, tap the suggestion carrying it. */
@@ -1241,6 +1252,8 @@ class TatkalTapService : AccessibilityService() {
         val btn = snap.firstOrNull { Regex("^sign\\s?in$").matches(it.lower) } ?: return Res.MISSING
         if (!tapNode(btn)) return Res.MISSING
         taps[key] = TapRec(1, System.currentTimeMillis())
+        val ms = if (loginSeenTs > 0) System.currentTimeMillis() - loginSeenTs else -1
+        engineStatus(stageStatus(stage, say, " — login filled + SIGN IN in ${ms} ms"))
         return Res.ACTED
     }
 
@@ -1610,10 +1623,15 @@ class TatkalTapService : AccessibilityService() {
         return true
     }
 
+    private var lastShotTs = 0L
+
     /** Screenshot (API 30+) and find the language alert's two orange buttons.
      *  Returns (left, right) in screen pixels, or null. Runs on the engine thread. */
     private fun findLanguageButtons(): Pair<Rect, Rect>? {
         if (Build.VERSION.SDK_INT < 30) return null
+        val since = System.currentTimeMillis() - lastShotTs
+        if (since < 1_050L) try { Thread.sleep(1_050L - since) } catch (_: Exception) { }
+        lastShotTs = System.currentTimeMillis()
         return try {
             val latch = CountDownLatch(1)
             var bmp: android.graphics.Bitmap? = null
